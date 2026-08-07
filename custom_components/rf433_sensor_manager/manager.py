@@ -4,10 +4,12 @@ from __future__ import annotations
 
 import logging
 from collections import OrderedDict
+from collections.abc import Callable
 from time import monotonic
 from typing import Any
 
 from homeassistant.components import mqtt
+from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers.storage import Store
 from homeassistant.util import dt as dt_util
@@ -34,17 +36,26 @@ STORE_VERSION = 1
 class RF433Manager:
     """Own the sole MQTT subscription and route accepted packets."""
 
-    def __init__(self, hass: HomeAssistant, entry) -> None:
+    def __init__(self, hass: HomeAssistant, entry: ConfigEntry) -> None:
         self.hass, self.entry = hass, entry
         options = {**DEFAULT_OPTIONS, **entry.options}
-        self.profiles = {DEFAULT_PROFILE_ID: DEFAULT_PROFILE, **{p["id"]: p for p in options[CONF_PROFILES]}}
-        self.sensors = {s["id"]: SensorRuntime(s) for s in options[CONF_SENSORS]}
+        self.profiles: dict[str, dict[str, Any]] = {
+            DEFAULT_PROFILE_ID: DEFAULT_PROFILE,
+            **{p["id"]: p for p in options[CONF_PROFILES]},
+        }
+        self.sensors: dict[str, SensorRuntime] = {s["id"]: SensorRuntime(s) for s in options[CONF_SENSORS]}
         self.unknown: OrderedDict[str, dict[str, Any]] = OrderedDict()
-        self.stats = {"received": 0, "accepted": 0, "duplicates": 0, "malformed": 0, "unknown": 0}
+        self.stats: dict[str, int] = {
+            "received": 0,
+            "accepted": 0,
+            "duplicates": 0,
+            "malformed": 0,
+            "unknown": 0,
+        }
         self._recent: dict[str, float] = {}
-        self._unsub = None
-        self._store = Store(hass, STORE_VERSION, f"{DOMAIN}.{entry.entry_id}")
-        self.scan_callbacks: set[Any] = set()
+        self._unsub: Callable[[], None] | None = None
+        self._store: Store[dict[str, Any]] = Store(hass, STORE_VERSION, f"{DOMAIN}.{entry.entry_id}")
+        self.scan_callbacks: set[Callable[[str], None]] = set()
 
     async def async_start(self) -> None:
         if not await mqtt.async_wait_for_mqtt_client(self.hass):
@@ -73,7 +84,7 @@ class RF433Manager:
                 self.entry.data[CONF_PAYLOAD_FORMAT],
                 self.entry.data.get(CONF_JSON_PATH, "RfReceived.Data"),
             )
-        except ValueError, TypeError, KeyError:
+        except (ValueError, TypeError, KeyError):
             payload = None
         if payload is None:
             self.stats["malformed"] += 1
@@ -95,7 +106,9 @@ class RF433Manager:
         now = dt_util.utcnow().isoformat()
         for runtime in self.sensors.values():
             profile = self.profiles.get(runtime.config["profile_id"])
-            parsed = parse(payload, profile) if profile else None
+            if profile is None:
+                continue
+            parsed = parse(payload, profile)
             if parsed and parsed[0] == runtime.config["rf_id"]:
                 kind = event_kind(parsed[1], profile)
                 runtime.last_payload, runtime.last_seen = payload, now
