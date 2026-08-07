@@ -13,6 +13,7 @@ A UI-configured Home Assistant custom integration that converts raw RF433 messag
 - Built-in **DS-4 / Generic Contact Sensor** protocol (`AAAAEE`: four-character ID and two-character event)
 - Reusable custom protocol profiles and exact RF-ID matching
 - Manual, learn-mode, and recent-unknown-signal sensor creation
+- Setup-time MQTT scanning that accumulates every protocol-compatible RF device it sees
 - Door/window contact, latched low battery, native tamper event, last message, last seen, and battery-reset button
 - Persistent contact/battery/history state, bounded unknown history, diagnostics, and stable device/entity identifiers
 - Entirely native Home Assistant config and options flows; no YAML or custom frontend
@@ -30,11 +31,11 @@ For manual installation, copy `custom_components/rf433_sensor_manager` into the 
 
 ## Configuration
 
-Each entry represents one RF bridge. Enter a name, MQTT subscription topic, payload format, and (for JSON) a dotted path such as `RfReceived.Data`. Open **Configure** afterward to add or learn sensors, manage custom profiles, inspect unknown signals, and change bridge settings.
+Each entry represents one RF bridge. The setup form starts with **Tasmota Sonoff RF-bridge**, topic `tele/rf_bridge/RESULT`, JSON payloads, and path `RfReceived.Data`; every value remains editable. Setup then asks you to confirm or customize the default protocol profile before offering to scan MQTT, add sensors manually, or finish setup.
 
-The built-in profile recognizes six hexadecimal characters: the first four are the exact sensor ID and the final two map `0A` open, `0E` closed, `07` tamper, and `06` low battery. Low battery remains set until **Battery replaced** is pressed. Open/close messages never clear it.
+The default profile recognizes six hexadecimal characters: the first four are the exact sensor ID and the final two map `0A` open, `0E` closed, `07` tamper, and `06` low battery. These values are shown during initial setup and can be edited for another protocol. Low battery remains set until **Battery replaced** is pressed. Open/close messages never clear it.
 
-Learn mode listens for 60 seconds. Because RF transmissions are unauthenticated, confirm that the displayed code belongs to the intended sensor. Unknown history is limited to 100 distinct raw codes.
+Scan/Learn mode listens for 15 seconds and builds a selectable list of all matching RF device IDs, event codes, and event types received during the scan. Select **Scan again** to keep growing the same list. Because RF transmissions are unauthenticated, confirm that a displayed code belongs to the intended sensor. Unknown history is limited to 100 distinct raw codes.
 
 ## Development
 

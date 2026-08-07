@@ -16,6 +16,10 @@ CONF_PROFILES = "profiles"
 CONF_SENSORS = "sensors"
 FORMAT_JSON = "json"
 FORMAT_RAW = "raw"
+DEFAULT_BRIDGE_NAME = "Tasmota Sonoff RF-bridge"
+DEFAULT_MQTT_TOPIC = "tele/rf_bridge/RESULT"
+DEFAULT_JSON_PATH = "RfReceived.Data"
+SCAN_DURATION = 15
 DEFAULT_PROFILE_ID = "ds4_contact"
 DEFAULT_PROFILE = {
     "id": DEFAULT_PROFILE_ID,
