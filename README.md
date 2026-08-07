@@ -1,5 +1,9 @@
 # RF433 Sensor Manager
 
+<p align="center">
+  <img src="custom_components/rf433_sensor_manager/brand/logo.png" alt="RF433 Sensor Manager" width="560">
+</p>
+
 A UI-configured Home Assistant custom integration that converts raw RF433 messages arriving through Home Assistant's MQTT integration into native devices and entities. MQTT is transport only; decoded state is never republished.
 
 ## Features
