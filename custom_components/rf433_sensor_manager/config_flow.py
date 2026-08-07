@@ -191,7 +191,7 @@ class RF433OptionsFlow(config_entries.OptionsFlow):
             if candidate is None:
                 return self.async_abort(reason="learn_invalid_profile")
             self._learned = candidate[0]
-        except (TimeoutError, asyncio.CancelledError):
+        except TimeoutError, asyncio.CancelledError:
             return self.async_abort(reason="learn_timeout")
         return await self._sensor_form("learn_done", user_input)
 

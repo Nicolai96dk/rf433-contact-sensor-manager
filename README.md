@@ -34,11 +34,11 @@ Learn mode listens for 60 seconds. Because RF transmissions are unauthenticated,
 
 ## Development
 
-Use Python 3.13, install the `test` dependency group, then run `pytest`, `ruff check .`, and `mypy custom_components/rf433_sensor_manager`. GitHub Actions also runs HACS and hassfest validation.
+Use Python 3.14.2 or newer, install the `test` dependency group, then run `pytest`, `ruff check .`, and `mypy custom_components/rf433_sensor_manager`. GitHub Actions also runs HACS and hassfest validation.
 
 ## Privacy and limitations
 
-Diagnostics redact configured RF identifiers. RF433 signals can be replayed and should not be treated as a security boundary. A Home Assistant restart/reload is not needed for options changes; the entry reloads automatically. Registering the repository in Home Assistant Brands and publishing a GitHub release are external release steps that cannot be completed from source alone.
+Diagnostics redact configured RF identifiers. RF433 signals can be replayed and should not be treated as a security boundary. A Home Assistant restart is not needed for options changes; the entry reloads automatically.
 
 ## License
 

@@ -72,7 +72,7 @@ class RF433Manager:
             if self.entry.data[CONF_PAYLOAD_FORMAT] == FORMAT_JSON:
                 value = dotted_get(json.loads(message.payload), self.entry.data[CONF_JSON_PATH])
             payload = normalize_payload(value)
-        except (ValueError, TypeError, KeyError):
+        except ValueError, TypeError, KeyError:
             payload = None
         if payload is None:
             self.stats["malformed"] += 1

@@ -1,13 +1,13 @@
 {
+  "domain": "rf433_sensor_manager",
+  "name": "RF433 Sensor Manager",
   "codeowners": ["@Nicolai96dk"],
   "config_flow": true,
   "dependencies": ["mqtt"],
   "documentation": "https://github.com/Nicolai96dk/rf433-sensor-manager",
-  "domain": "rf433_sensor_manager",
   "integration_type": "hub",
   "iot_class": "local_push",
   "issue_tracker": "https://github.com/Nicolai96dk/rf433-sensor-manager/issues",
-  "name": "RF433 Sensor Manager",
   "requirements": [],
-  "version": "0.1.0"
+  "version": "0.1.1"
 }
