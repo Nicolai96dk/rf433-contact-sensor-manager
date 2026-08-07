@@ -101,16 +101,22 @@ class RF433ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         """Collect the bridge source settings."""
         errors: dict[str, str] = {}
         if user_input is not None:
-            if not await mqtt.async_wait_for_mqtt_client(self.hass):
-                errors["base"] = "mqtt_unavailable"
+            try:
+                topic = mqtt.valid_subscribe_topic(user_input[CONF_TOPIC])
+            except vol.Invalid:
+                errors[CONF_TOPIC] = "invalid_topic"
             else:
-                self._entry_data = dict(user_input)
-                self._entry_data.setdefault(CONF_JSON_PATH, DEFAULT_JSON_PATH)
-                return await self.async_step_protocol()
+                if not await mqtt.async_wait_for_mqtt_client(self.hass):
+                    errors["base"] = "mqtt_unavailable"
+                else:
+                    self._entry_data = dict(user_input)
+                    self._entry_data[CONF_TOPIC] = topic
+                    self._entry_data.setdefault(CONF_JSON_PATH, DEFAULT_JSON_PATH)
+                    return await self.async_step_protocol()
         schema = vol.Schema(
             {
                 vol.Required(CONF_NAME, default=DEFAULT_BRIDGE_NAME): str,
-                vol.Required(CONF_TOPIC, default=DEFAULT_MQTT_TOPIC): mqtt.valid_subscribe_topic,
+                vol.Required(CONF_TOPIC, default=DEFAULT_MQTT_TOPIC): str,
                 vol.Required(CONF_PAYLOAD_FORMAT, default=FORMAT_JSON): FORMAT_SELECTOR,
                 vol.Optional(CONF_JSON_PATH, default=DEFAULT_JSON_PATH): str,
             }
@@ -339,26 +345,43 @@ class RF433OptionsFlow(config_entries.OptionsFlow):
         )
 
     async def async_step_bridge(self, user_input=None):
+        errors: dict[str, str] = {}
         if user_input is not None:
-            data = dict(self.config_entry.data)
-            data.update({k: user_input[k] for k in (CONF_TOPIC, CONF_PAYLOAD_FORMAT, CONF_JSON_PATH)})
-            self.hass.config_entries.async_update_entry(self.config_entry, data=data)
-            self.options[CONF_DUPLICATE_INTERVAL] = user_input[CONF_DUPLICATE_INTERVAL]
-            return self.async_create_entry(data=self.options)
-        data = dict(self.config_entry.data)
+            try:
+                topic = mqtt.valid_subscribe_topic(user_input[CONF_TOPIC])
+            except vol.Invalid:
+                errors[CONF_TOPIC] = "invalid_topic"
+            else:
+                data = dict(self.config_entry.data)
+                data.update(
+                    {
+                        CONF_TOPIC: topic,
+                        CONF_PAYLOAD_FORMAT: user_input[CONF_PAYLOAD_FORMAT],
+                        CONF_JSON_PATH: user_input[CONF_JSON_PATH],
+                    }
+                )
+                self.hass.config_entries.async_update_entry(self.config_entry, data=data)
+                self.options[CONF_DUPLICATE_INTERVAL] = user_input[CONF_DUPLICATE_INTERVAL]
+                return self.async_create_entry(data=self.options)
+        values = {
+            **self.config_entry.data,
+            CONF_DUPLICATE_INTERVAL: self.options[CONF_DUPLICATE_INTERVAL],
+            **(user_input or {}),
+        }
         return self.async_show_form(
             step_id="bridge",
             data_schema=vol.Schema(
                 {
-                    vol.Required(CONF_TOPIC, default=data[CONF_TOPIC]): mqtt.valid_subscribe_topic,
-                    vol.Required(CONF_PAYLOAD_FORMAT, default=data[CONF_PAYLOAD_FORMAT]): FORMAT_SELECTOR,
-                    vol.Optional(CONF_JSON_PATH, default=data.get(CONF_JSON_PATH, DEFAULT_JSON_PATH)): str,
+                    vol.Required(CONF_TOPIC, default=values[CONF_TOPIC]): str,
+                    vol.Required(CONF_PAYLOAD_FORMAT, default=values[CONF_PAYLOAD_FORMAT]): FORMAT_SELECTOR,
+                    vol.Optional(CONF_JSON_PATH, default=values.get(CONF_JSON_PATH, DEFAULT_JSON_PATH)): str,
                     vol.Required(
                         CONF_DUPLICATE_INTERVAL,
-                        default=self.options[CONF_DUPLICATE_INTERVAL],
+                        default=values[CONF_DUPLICATE_INTERVAL],
                     ): vol.All(vol.Coerce(float), vol.Range(min=0, max=60)),
                 }
             ),
+            errors=errors,
         )
 
     def _profiles(self) -> list[dict[str, Any]]:
