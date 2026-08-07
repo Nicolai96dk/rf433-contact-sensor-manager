@@ -78,6 +78,11 @@ def _detection_label(detection: dict[str, Any]) -> str:
     return f"{detection['device_id']} — {events} ({codes}) — {detection['count']} signal(s)"
 
 
+def _select_option(value: str, label: str) -> selector.SelectOptionDict:
+    """Build a typed selector option."""
+    return {"value": value, "label": label}
+
+
 class RF433ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
     """Set up one MQTT RF bridge and its first protocol profile."""
 
@@ -85,8 +90,8 @@ class RF433ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
 
     def __init__(self) -> None:
         self._entry_data: dict[str, Any] = {}
-        self._pending_options = deepcopy(DEFAULT_OPTIONS)
-        self._scan_profile = deepcopy(DEFAULT_PROFILE)
+        self._pending_options: dict[str, Any] = deepcopy(DEFAULT_OPTIONS)
+        self._scan_profile: dict[str, Any] = deepcopy(DEFAULT_PROFILE)
         self._scan_task: asyncio.Task[None] | None = None
         self._scan_detections: dict[str, dict[str, Any]] = {}
         self._scan_error: str | None = None
@@ -150,7 +155,7 @@ class RF433ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                     self._entry_data[CONF_PAYLOAD_FORMAT],
                     self._entry_data.get(CONF_JSON_PATH, DEFAULT_JSON_PATH),
                 )
-            except ValueError, TypeError, KeyError:
+            except (ValueError, TypeError, KeyError):
                 return
             if payload is not None:
                 record_detection(self._scan_detections, payload, self._scan_profile)
@@ -202,10 +207,10 @@ class RF433ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             self._selected_detection = self._scan_detections[user_input["device"]]
             return await self.async_step_onboarding_sensor()
         choices = [
-            {"value": device_id, "label": _detection_label(detection)}
+            _select_option(device_id, _detection_label(detection))
             for device_id, detection in self._scan_detections.items()
         ]
-        choices.append({"value": SCAN_AGAIN, "label": "Scan again to find more devices"})
+        choices.append(_select_option(SCAN_AGAIN, "Scan again to find more devices"))
         return self.async_show_form(
             step_id="scan_results",
             data_schema=vol.Schema(
@@ -340,7 +345,7 @@ class RF433OptionsFlow(config_entries.OptionsFlow):
             self.hass.config_entries.async_update_entry(self.config_entry, data=data)
             self.options[CONF_DUPLICATE_INTERVAL] = user_input[CONF_DUPLICATE_INTERVAL]
             return self.async_create_entry(data=self.options)
-        data = self.config_entry.data
+        data = dict(self.config_entry.data)
         return self.async_show_form(
             step_id="bridge",
             data_schema=vol.Schema(
@@ -367,7 +372,7 @@ class RF433OptionsFlow(config_entries.OptionsFlow):
     def _profile_selector(self):
         return selector.SelectSelector(
             selector.SelectSelectorConfig(
-                options=[{"value": profile["id"], "label": profile["name"]} for profile in self._profiles()]
+                options=[_select_option(profile["id"], profile["name"]) for profile in self._profiles()]
             )
         )
 
@@ -490,10 +495,10 @@ class RF433OptionsFlow(config_entries.OptionsFlow):
             self._learn_event = f"{', '.join(selected['event_codes'])} / {', '.join(selected['events'])}"
             return await self._sensor_form("learn_done", None)
         choices = [
-            {"value": device_id, "label": _detection_label(detection)}
+            _select_option(device_id, _detection_label(detection))
             for device_id, detection in self._scan_detections.items()
         ]
-        choices.append({"value": SCAN_AGAIN, "label": "Scan again to find more devices"})
+        choices.append(_select_option(SCAN_AGAIN, "Scan again to find more devices"))
         return self.async_show_form(
             step_id="learn_results",
             data_schema=vol.Schema(
@@ -515,7 +520,7 @@ class RF433OptionsFlow(config_entries.OptionsFlow):
         if user_input is not None:
             self._selected = user_input["sensor"]
             return self.async_show_menu(step_id="sensor_action", menu_options=["edit_sensor", "delete_sensor"])
-        choices = [{"value": sensor["id"], "label": sensor["name"]} for sensor in self.options[CONF_SENSORS]]
+        choices = [_select_option(sensor["id"], sensor["name"]) for sensor in self.options[CONF_SENSORS]]
         return self.async_show_form(
             step_id="sensors",
             data_schema=vol.Schema(
@@ -602,7 +607,7 @@ class RF433OptionsFlow(config_entries.OptionsFlow):
                 {
                     vol.Required("profile"): selector.SelectSelector(
                         selector.SelectSelectorConfig(
-                            options=[{"value": profile["id"], "label": profile["name"]} for profile in profiles]
+                            options=[_select_option(profile["id"], profile["name"]) for profile in profiles]
                         )
                     )
                 }
@@ -635,7 +640,7 @@ class RF433OptionsFlow(config_entries.OptionsFlow):
             self._learn_event = selected.get("event_code") or ""
             return await self._sensor_form("unknown_create", None)
         choices = [
-            {"value": key, "label": f"{key} — {value['count']}x — {value['last_seen']}"}
+            _select_option(key, f"{key} — {value['count']}x — {value['last_seen']}")
             for key, value in reversed(unknown.items())
         ]
         return self.async_show_form(

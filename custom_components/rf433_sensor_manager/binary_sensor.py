@@ -6,7 +6,7 @@ from .entity import RF433Entity
 
 
 async def async_setup_entry(hass, entry, async_add_entities):
-    entities = []
+    entities: list[BinarySensorEntity] = []
     for runtime in entry.runtime_data.sensors.values():
         entities.append(Contact(entry.runtime_data, runtime))
         profile = entry.runtime_data.profiles[runtime.config["profile_id"]]
