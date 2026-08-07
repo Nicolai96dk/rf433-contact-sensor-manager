@@ -100,6 +100,7 @@
     },
     "error": {
       "mqtt_unavailable": "Configure and connect Home Assistant's MQTT integration first.",
+      "invalid_topic": "Enter a valid MQTT subscription topic.",
       "invalid_profile": "Check the profile positions, lengths, and event codes. Codes must be unique hexadecimal values with the configured event length.",
       "invalid_hex": "Enter a hexadecimal value.",
       "invalid_rf_id_length": "The RF ID length must match the protocol profile.",
@@ -297,6 +298,7 @@
       }
     },
     "error": {
+      "invalid_topic": "Enter a valid MQTT subscription topic.",
       "invalid_profile": "Check the profile positions, lengths, and event codes. Codes must be unique hexadecimal values with the configured event length.",
       "invalid_hex": "Enter a hexadecimal value.",
       "invalid_rf_id_length": "The RF ID length must match the selected protocol profile.",
