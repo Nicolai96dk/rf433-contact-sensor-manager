@@ -2,6 +2,7 @@
 
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
+from homeassistant.exceptions import ConfigEntryNotReady, HomeAssistantError
 from homeassistant.helpers import device_registry as dr
 from homeassistant.helpers import entity_registry as er
 
@@ -13,7 +14,10 @@ type RF433ConfigEntry = ConfigEntry[RF433Manager]
 
 async def async_setup_entry(hass: HomeAssistant, entry: RF433ConfigEntry) -> bool:
     manager = RF433Manager(hass, entry)
-    await manager.async_start()
+    try:
+        await manager.async_start()
+    except (HomeAssistantError, RuntimeError) as err:
+        raise ConfigEntryNotReady(str(err)) from err
     entry.runtime_data = manager
     entry.async_on_unload(entry.add_update_listener(_async_reload))
     _remove_stale_registry_items(hass, entry, set(manager.sensors))
@@ -60,5 +64,15 @@ async def _async_reload(hass: HomeAssistant, entry: ConfigEntry) -> None:
 async def async_migrate_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """Migrate old entries."""
     if entry.version == 1:
+        from copy import deepcopy
+
+        from .const import CONF_PROFILES, DEFAULT_PROFILE, DEFAULT_PROFILE_ID
+
+        options = dict(entry.options)
+        profiles = list(options.get(CONF_PROFILES, []))
+        if not any(profile["id"] == DEFAULT_PROFILE_ID for profile in profiles):
+            profiles.insert(0, deepcopy(DEFAULT_PROFILE))
+        options[CONF_PROFILES] = profiles
+        hass.config_entries.async_update_entry(entry, options=options, version=2)
         return True
-    return False
+    return entry.version == 2

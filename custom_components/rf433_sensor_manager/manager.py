@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import json
 import logging
 from collections import OrderedDict
 from time import monotonic
@@ -24,10 +23,9 @@ from .const import (
     DEFAULT_PROFILE,
     DEFAULT_PROFILE_ID,
     DOMAIN,
-    FORMAT_JSON,
     SensorRuntime,
 )
-from .protocol import dotted_get, event_kind, normalize_payload, parse
+from .protocol import event_kind, extract_payload, parse
 
 _LOGGER = logging.getLogger(__name__)
 STORE_VERSION = 1
@@ -46,9 +44,11 @@ class RF433Manager:
         self._recent: dict[str, float] = {}
         self._unsub = None
         self._store = Store(hass, STORE_VERSION, f"{DOMAIN}.{entry.entry_id}")
-        self.learn_callbacks: set[Any] = set()
+        self.scan_callbacks: set[Any] = set()
 
     async def async_start(self) -> None:
+        if not await mqtt.async_wait_for_mqtt_client(self.hass):
+            raise RuntimeError("Home Assistant's MQTT integration is not configured or available")
         saved = await self._store.async_load() or {}
         self.unknown.update(saved.get("unknown", {}))
         for sid, state in saved.get("states", {}).items():
@@ -68,16 +68,19 @@ class RF433Manager:
     def _message(self, message) -> None:
         self.stats["received"] += 1
         try:
-            value: Any = message.payload
-            if self.entry.data[CONF_PAYLOAD_FORMAT] == FORMAT_JSON:
-                value = dotted_get(json.loads(message.payload), self.entry.data[CONF_JSON_PATH])
-            payload = normalize_payload(value)
+            payload = extract_payload(
+                message.payload,
+                self.entry.data[CONF_PAYLOAD_FORMAT],
+                self.entry.data.get(CONF_JSON_PATH, "RfReceived.Data"),
+            )
         except ValueError, TypeError, KeyError:
             payload = None
         if payload is None:
             self.stats["malformed"] += 1
             _LOGGER.debug("Ignoring malformed RF message on %s", message.topic)
             return
+        for scan_callback in tuple(self.scan_callbacks):
+            scan_callback(payload)
         interval = float(self.entry.options.get(CONF_DUPLICATE_INTERVAL, 1.0))
         now_mono = monotonic()
         if interval and now_mono - self._recent.get(payload, -interval) < interval:
@@ -90,8 +93,6 @@ class RF433Manager:
     @callback
     def _process(self, payload: str) -> None:
         now = dt_util.utcnow().isoformat()
-        for cb in tuple(self.learn_callbacks):
-            cb(payload)
         for runtime in self.sensors.values():
             profile = self.profiles.get(runtime.config["profile_id"])
             parsed = parse(payload, profile) if profile else None
@@ -110,7 +111,7 @@ class RF433Manager:
                 self.hass.async_create_task(self._async_save())
                 return
         self.stats["unknown"] += 1
-        candidate = next((parse(payload, p) for p in self.profiles.values() if parse(payload, p)), None)
+        candidate = next((parsed for profile in self.profiles.values() if (parsed := parse(payload, profile))), None)
         item = self.unknown.pop(payload, {"raw": payload, "first_seen": now, "count": 0})
         item.update(
             {
