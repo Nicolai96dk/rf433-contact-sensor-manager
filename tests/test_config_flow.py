@@ -25,10 +25,11 @@ from custom_components.rf433_sensor_manager.const import (
     DOMAIN,
     FORMAT_JSON,
 )
+from custom_components.rf433_sensor_manager.preview import render_learning_preview, render_profile_preview
 
 
 @pytest.mark.usefixtures("enable_custom_integrations")
-async def test_user_flow_loads_with_tasmota_defaults(hass, monkeypatch) -> None:
+async def test_user_flow_loads_with_tasmota_defaults(hass, hass_ws_client, monkeypatch) -> None:
     """The guided setup opens a live profile preview with Tasmota defaults."""
 
     callbacks = []
@@ -55,9 +56,11 @@ async def test_user_flow_loads_with_tasmota_defaults(hass, monkeypatch) -> None:
     assert defaults[CONF_TOPIC] == DEFAULT_MQTT_TOPIC
 
     result = await hass.config_entries.flow.async_configure(result["flow_id"], defaults)
-    assert result["type"] is FlowResultType.EXTERNAL_STEP
+    assert result["type"] is FlowResultType.FORM
     assert result["step_id"] == "protocol"
-    session = hass.data[DOMAIN]["live_sessions"][result["flow_id"]]
+    assert result["preview"] == DOMAIN
+    assert convert(result["data_schema"], custom_serializer=cv.custom_serializer)
+    session = hass.data[DOMAIN]["preview_sessions"][result["flow_id"]]
     assert session.data["profile"]["open_code"] == "0A"
     callbacks[-1](
         SimpleNamespace(
@@ -68,9 +71,20 @@ async def test_user_flow_loads_with_tasmota_defaults(hass, monkeypatch) -> None:
     assert session.data["latest"] == "6F620A"
 
     profile_input = {key: value for key, value in DEFAULT_PROFILE.items() if key not in {"id", "builtin"}}
-    result = await hass.config_entries.flow.async_configure(result["flow_id"], {"profile": profile_input})
-    assert result["type"] is FlowResultType.EXTERNAL_STEP_DONE
-    result = await hass.config_entries.flow.async_configure(result["flow_id"])
+    preview = render_profile_preview(session.data, profile_input)
+    assert preview["state"] == "Identified 6F620A: Open"
+    client = await hass_ws_client(hass)
+    await client.send_json_auto_id(
+        {
+            "type": f"{DOMAIN}/start_preview",
+            "flow_id": result["flow_id"],
+            "flow_type": "config_flow",
+            "user_input": profile_input,
+        }
+    )
+    assert (await client.receive_json())["success"]
+    assert (await client.receive_json())["event"]["state"] == "Identified 6F620A: Open"
+    result = await hass.config_entries.flow.async_configure(result["flow_id"], profile_input)
     assert result["type"] is FlowResultType.MENU
     assert result["step_id"] == "onboarding"
     assert result["menu_options"] == ["scan", "manual", "finish"]
@@ -78,7 +92,7 @@ async def test_user_flow_loads_with_tasmota_defaults(hass, monkeypatch) -> None:
 
 
 @pytest.mark.usefixtures("enable_custom_integrations")
-async def test_setup_scan_is_live_until_done_and_seeds_sensor(hass, monkeypatch) -> None:
+async def test_setup_scan_is_live_until_done_and_seeds_sensor(hass, hass_ws_client, monkeypatch) -> None:
     """Discovery pushes new IDs and carries learned state into the sensor."""
     callbacks = []
 
@@ -94,24 +108,49 @@ async def test_setup_scan_is_live_until_done_and_seeds_sensor(hass, monkeypatch)
     result = await hass.config_entries.flow.async_init(DOMAIN, context={"source": config_entries.SOURCE_USER})
     result = await hass.config_entries.flow.async_configure(result["flow_id"], result["data_schema"]({}))
     profile_input = {key: value for key, value in DEFAULT_PROFILE.items() if key not in {"id", "builtin"}}
-    result = await hass.config_entries.flow.async_configure(result["flow_id"], {"profile": profile_input})
-    result = await hass.config_entries.flow.async_configure(result["flow_id"])
+    result = await hass.config_entries.flow.async_configure(result["flow_id"], profile_input)
     result = await hass.config_entries.flow.async_configure(result["flow_id"], {"next_step_id": "scan"})
 
-    assert result["type"] is FlowResultType.EXTERNAL_STEP
+    assert result["type"] is FlowResultType.FORM
     assert result["step_id"] == "scan"
+    assert result["preview"] == DOMAIN
+    client = await hass_ws_client(hass)
+    await client.send_json_auto_id(
+        {
+            "type": f"{DOMAIN}/start_preview",
+            "flow_id": result["flow_id"],
+            "flow_type": "config_flow",
+            "user_input": result["data_schema"]({}),
+        }
+    )
+    assert (await client.receive_json())["success"]
+    assert (await client.receive_json())["event"]["state"] == "Waiting for an RF signal…"
     scan_callback = callbacks[-1]
-    scan_callback(SimpleNamespace(payload=json.dumps({"RfReceived": {"Data": "6F620A"}}), topic=DEFAULT_MQTT_TOPIC))
     scan_callback(SimpleNamespace(payload=json.dumps({"RfReceived": {"Data": "ABCD07"}}), topic=DEFAULT_MQTT_TOPIC))
-    session = hass.data[DOMAIN]["live_sessions"][result["flow_id"]]
-    assert [item["device_id"] for item in session.data["detections"]] == ["6F62", "ABCD"]
+    assert "ABCD" in (await client.receive_json())["event"]["state"]
+    scan_callback(SimpleNamespace(payload=json.dumps({"RfReceived": {"Data": "6F620A"}}), topic=DEFAULT_MQTT_TOPIC))
+    pushed = (await client.receive_json())["event"]["state"]
+    assert "Identified Device 6F62" in pushed
+    assert "ABCD" in pushed
+    session = hass.data[DOMAIN]["preview_sessions"][result["flow_id"]]
+    assert list(session.data["detections"]) == ["ABCD", "6F62"]
+    assert session.data["current_device_id"] == "6F62"
+    preview = render_learning_preview(session.data, {})
+    assert "Identified Device 6F62" in preview["state"]
+    assert "ABCD" in preview["state"]
 
     result = await hass.config_entries.flow.async_configure(
         result["flow_id"],
-        {"devices": [{"device_id": "6F62", "name": "Office window", "area_id": "office"}]},
+        {"name": "Office window", "contact_type": "window", "area_id": "office", "done": False},
     )
-    assert result["type"] is FlowResultType.EXTERNAL_STEP_DONE
-    result = await hass.config_entries.flow.async_configure(result["flow_id"])
+    assert result["type"] is FlowResultType.FORM
+    serialized = convert(result["data_schema"], custom_serializer=cv.custom_serializer)
+    assert any("Device 6F62" in field.get("selector", {}).get("constant", {}).get("label", "") for field in serialized)
+    assert session.data["current_device_id"] == "ABCD"
+    result = await hass.config_entries.flow.async_configure(
+        result["flow_id"],
+        {"name": "", "contact_type": "door", "done": True},
+    )
     assert result["type"] is FlowResultType.MENU
     assert result["step_id"] == "onboarding_configured"
     assert result["description_placeholders"] == {"sensors": "1"}
@@ -120,6 +159,7 @@ async def test_setup_scan_is_live_until_done_and_seeds_sensor(hass, monkeypatch)
     sensor = result["options"]["sensors"][0]
     assert sensor["rf_id"] == "6F62"
     assert sensor["area_id"] == "office"
+    assert sensor["contact_type"] == "window"
     assert sensor["initial_contact"] is True
     assert sensor["initial_payload"] == "6F620A"
     assert sensor["initial_code_history"]["6F620A"]["event"] == "open"
@@ -174,7 +214,7 @@ async def test_bridge_options_schema_is_serializable(hass) -> None:
 
 @pytest.mark.usefixtures("enable_custom_integrations")
 async def test_options_learning_pushes_devices_until_done(hass) -> None:
-    """The options flow uses the manager callback until its live panel finishes."""
+    """The options flow stays in one native dialog until Done is selected."""
     manager = SimpleNamespace(scan_callbacks=set())
     entry = MockConfigEntry(
         domain=DOMAIN,
@@ -194,20 +234,27 @@ async def test_options_learning_pushes_devices_until_done(hass) -> None:
     result = await hass.config_entries.options.async_configure(result["flow_id"], {"next_step_id": "learn"})
     result = await hass.config_entries.options.async_configure(result["flow_id"], result["data_schema"]({}))
 
-    assert result["type"] is FlowResultType.EXTERNAL_STEP
+    assert result["type"] is FlowResultType.FORM
+    assert result["step_id"] == "learn_wait"
+    assert result["preview"] == DOMAIN
     callback = next(iter(manager.scan_callbacks))
     callback("6F620E")
-    session = hass.data[DOMAIN]["live_sessions"][result["flow_id"]]
-    assert session.data["detections"][0]["device_id"] == "6F62"
+    session = hass.data[DOMAIN]["preview_sessions"][result["flow_id"]]
+    assert list(session.data["detections"]) == ["6F62"]
 
     result = await hass.config_entries.options.async_configure(
         result["flow_id"],
-        {"devices": [{"device_id": "6F62", "name": "Kitchen window", "area_id": "kitchen"}]},
+        {"name": "Kitchen window", "contact_type": "window", "area_id": "kitchen", "done": False},
     )
-    assert result["type"] is FlowResultType.EXTERNAL_STEP_DONE
-    result = await hass.config_entries.options.async_configure(result["flow_id"])
+    assert result["type"] is FlowResultType.FORM
+    assert manager.scan_callbacks
+    result = await hass.config_entries.options.async_configure(
+        result["flow_id"],
+        {"name": "", "contact_type": "door", "done": True},
+    )
     assert result["type"] is FlowResultType.CREATE_ENTRY
     sensor = result["data"]["sensors"][0]
     assert sensor["initial_contact"] is False
     assert sensor["area_id"] == "kitchen"
+    assert sensor["contact_type"] == "window"
     assert not manager.scan_callbacks
