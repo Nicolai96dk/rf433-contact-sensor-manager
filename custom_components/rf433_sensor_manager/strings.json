@@ -19,18 +19,30 @@
       },
       "protocol": {
         "title": "Configure the default protocol profile",
-        "description": "RF scanning remains active in this dialog. The preview shows the latest complete code and interprets it immediately using the values below.",
+        "description": "**Live scanning is active.** Trigger an RF sensor to test the current configuration. The preview below shows the latest complete RF code and interprets it immediately using the values entered here.",
         "data": {
-          "name": "Profile name",
-          "payload_length": "Expected payload length",
-          "device_start": "Device ID start",
-          "device_length": "Device ID length",
-          "event_start": "Event start",
-          "event_length": "Event length",
-          "open_code": "Open code",
-          "closed_code": "Closed code",
-          "tamper_code": "Tamper code (optional)",
-          "battery_code": "Low-battery code (optional)"
+          "name": "Profile name"
+        },
+        "sections": {
+          "payload": {
+            "name": "Payload",
+            "data": {
+              "payload_length": "Expected payload length",
+              "device_start": "Device ID start",
+              "device_length": "Device ID length",
+              "event_start": "Event start",
+              "event_length": "Event length"
+            }
+          },
+          "codes": {
+            "name": "Codes",
+            "data": {
+              "open_code": "Open code",
+              "closed_code": "Closed code",
+              "tamper_code": "Tamper code (optional)",
+              "battery_code": "Low-battery code (optional)"
+            }
+          }
         }
       },
       "onboarding": {
@@ -42,7 +54,7 @@
           "finish": "Finish setup"
         },
         "menu_option_descriptions": {
-          "scan": "Listen for RF signals and build a list of identified devices.",
+          "scan": "Listen for RF signals and configure the latest detected device.",
           "manual": "Enter a known RF device ID.",
           "finish": "Create the bridge with the configured protocol and sensors."
         }
@@ -56,20 +68,19 @@
           "finish": "Finish setup"
         },
         "menu_option_descriptions": {
-          "scan": "Listen for RF signals and build a live list of identified devices.",
+          "scan": "Listen for RF signals and configure the latest detected device.",
           "manual": "Enter a known RF device ID.",
           "finish": "Create the bridge with the configured protocol and sensors."
         }
       },
       "scan": {
         "title": "Sensor Learning Mode",
-        "description": "Scanning remains active until **Done scanning** is selected. The newest device awaiting details is shown in the live preview. Save it to continue with the next detected device; previously saved devices remain listed below.",
-        "submit": "Save sensor / Done",
+        "description": "Scanning remains active in this dialog. The preview shows only the latest received RF code. The name and type below apply to the device ID extracted from that code.",
+        "submit": "Save sensor",
         "data": {
           "name": "Device name",
           "contact_type": "Type",
-          "area_id": "Area",
-          "done": "Done scanning"
+          "next_action": "After saving"
         }
       },
       "scan_error": {
@@ -127,7 +138,7 @@
       "invalid_hex": "Enter a hexadecimal value.",
       "invalid_rf_id_length": "The RF ID length must match the protocol profile.",
       "already_configured": "This RF ID is already configured.",
-      "no_signal": "Trigger an RF sensor before saving it, or select Done scanning."
+      "no_signal": "Trigger an RF sensor before choosing Add another sensor."
     },
     "abort": {
       "scan_cancelled": "Scanning was cancelled."
@@ -180,13 +191,12 @@
       },
       "learn_wait": {
         "title": "Sensor Learning Mode",
-        "description": "Scanning remains active until **Done scanning** is selected. The newest device awaiting details is shown in the live preview. Save it to continue with the next detected device; previously saved devices remain listed below.",
-        "submit": "Save sensor / Done",
+        "description": "Scanning remains active in this dialog. The preview shows only the latest received RF code. The name and type below apply to the device ID extracted from that code.",
+        "submit": "Save sensor",
         "data": {
           "name": "Device name",
           "contact_type": "Type",
-          "area_id": "Area",
-          "done": "Done scanning"
+          "next_action": "After saving"
         }
       },
       "learn_results": {
@@ -336,7 +346,7 @@
       "invalid_hex": "Enter a hexadecimal value.",
       "invalid_rf_id_length": "The RF ID length must match the selected protocol profile.",
       "already_configured": "This RF ID and profile are already configured.",
-      "no_signal": "Trigger an RF sensor before saving it, or select Done scanning."
+      "no_signal": "Trigger an RF sensor before choosing Add another sensor."
     },
     "abort": {
       "scan_cancelled": "Scanning was cancelled.",
@@ -361,6 +371,12 @@
       "options": {
         "door": "Door",
         "window": "Window"
+      }
+    },
+    "learning_action": {
+      "options": {
+        "add_another": "Add another sensor",
+        "done": "Done"
       }
     }
   },

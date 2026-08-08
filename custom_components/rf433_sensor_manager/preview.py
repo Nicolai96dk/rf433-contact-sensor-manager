@@ -70,9 +70,14 @@ def render_profile_preview(data: dict[str, Any], user_input: dict[str, Any]) -> 
     if not raw:
         return _preview_entity("Waiting for an RF signal…", "Scanning for RF codes")
 
+    entered = {key: value for key, value in user_input.items() if key not in {"payload", "codes"}}
+    for section_name in ("payload", "codes"):
+        section_values = user_input.get(section_name)
+        if isinstance(section_values, dict):
+            entered.update(section_values)
     values = {
         key: value
-        for key, value in {**data.get("profile", DEFAULT_PROFILE), **user_input}.items()
+        for key, value in {**data.get("profile", DEFAULT_PROFILE), **entered}.items()
         if key not in {"id", "builtin"}
     }
     try:
@@ -94,26 +99,16 @@ def render_profile_preview(data: dict[str, Any], user_input: dict[str, Any]) -> 
     return _preview_entity(f"Identified {raw}: {status}", f"Scanning · Device {device_id}")
 
 
-def render_learning_preview(data: dict[str, Any], user_input: dict[str, Any]) -> dict[str, Any]:
-    """Show the current device and every ID accumulated by the open-ended scan."""
-    detections: dict[str, dict[str, Any]] = data.get("detections", {})
-    if not detections:
+def render_learning_preview(data: dict[str, Any], _user_input: dict[str, Any]) -> dict[str, Any]:
+    """Show only the latest RF signal used by the learning form."""
+    raw = data.get("latest")
+    if not raw:
         return _preview_entity("Waiting for an RF signal…", "Scanning for RF sensors")
 
-    device_ids = list(reversed(detections))
-    ids = ", ".join(device_ids)
     current_id = data.get("current_device_id")
-    if current_id is None:
-        return _preview_entity(
-            f"All identified devices are configured · Scanned: {ids}",
-            f"Scanning · {len(device_ids)} device{'s' if len(device_ids) != 1 else ''}",
-        )
-    configured = set(data.get("configured_ids", []))
-    waiting = sum(device_id != current_id and device_id not in configured for device_id in device_ids)
-    suffix = f" · {waiting} waiting" if waiting else ""
     return _preview_entity(
-        f"Identified Device {current_id}{suffix} · Scanned: {ids}",
-        f"Scanning · {len(device_ids)} device{'s' if len(device_ids) != 1 else ''}",
+        f"Identified {raw}",
+        f"Scanning · Device {current_id}" if current_id else "Scanning for RF sensors",
     )
 
 
