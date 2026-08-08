@@ -19,7 +19,7 @@
       },
       "protocol": {
         "title": "Configure the default protocol profile",
-        "description": "These defaults decode DS-4 / Generic Contact Sensor messages such as 6F620A into device ID 6F62 and event 0A. Adjust them if your sensors use another format.",
+        "description": "RF scanning remains active in this dialog. The preview shows the latest complete code and interprets it immediately using the values below.",
         "data": {
           "name": "Profile name",
           "payload_length": "Expected payload length",
@@ -62,8 +62,15 @@
         }
       },
       "scan": {
-        "title": "Scanning for RF sensors",
-        "description": "Trigger each physical sensor at least once while the scan is running."
+        "title": "Sensor Learning Mode",
+        "description": "Scanning remains active until **Done scanning** is selected. The newest device awaiting details is shown in the live preview. Save it to continue with the next detected device; previously saved devices remain listed below.",
+        "submit": "Save sensor / Done",
+        "data": {
+          "name": "Device name",
+          "contact_type": "Type",
+          "area_id": "Area",
+          "done": "Done scanning"
+        }
       },
       "scan_error": {
         "title": "MQTT is unavailable",
@@ -119,7 +126,8 @@
       "invalid_profile": "Check the profile positions, lengths, and event codes. Codes must be unique hexadecimal values with the configured event length.",
       "invalid_hex": "Enter a hexadecimal value.",
       "invalid_rf_id_length": "The RF ID length must match the protocol profile.",
-      "already_configured": "This RF ID is already configured."
+      "already_configured": "This RF ID is already configured.",
+      "no_signal": "Trigger an RF sensor before saving it, or select Done scanning."
     },
     "abort": {
       "scan_cancelled": "Scanning was cancelled."
@@ -171,8 +179,15 @@
         }
       },
       "learn_wait": {
-        "title": "Scanning RF signals",
-        "description": "Trigger every sensor you want to identify. Valid device IDs are accumulated instead of stopping at the first signal."
+        "title": "Sensor Learning Mode",
+        "description": "Scanning remains active until **Done scanning** is selected. The newest device awaiting details is shown in the live preview. Save it to continue with the next detected device; previously saved devices remain listed below.",
+        "submit": "Save sensor / Done",
+        "data": {
+          "name": "Device name",
+          "contact_type": "Type",
+          "area_id": "Area",
+          "done": "Done scanning"
+        }
       },
       "learn_results": {
         "title": "Identified RF devices",
@@ -320,7 +335,8 @@
       "invalid_profile": "Check the profile positions, lengths, and event codes. Codes must be unique hexadecimal values with the configured event length.",
       "invalid_hex": "Enter a hexadecimal value.",
       "invalid_rf_id_length": "The RF ID length must match the selected protocol profile.",
-      "already_configured": "This RF ID and profile are already configured."
+      "already_configured": "This RF ID and profile are already configured.",
+      "no_signal": "Trigger an RF sensor before saving it, or select Done scanning."
     },
     "abort": {
       "scan_cancelled": "Scanning was cancelled.",
