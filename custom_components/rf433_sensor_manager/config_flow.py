@@ -17,7 +17,6 @@ from homeassistant.helpers import selector
 from homeassistant.util import dt as dt_util
 
 from .const import (
-    CONF_AREA_ID,
     CONF_DUPLICATE_INTERVAL,
     CONF_JSON_PATH,
     CONF_NAME,
@@ -58,7 +57,6 @@ FORMAT_SELECTOR = selector.SelectSelector(
 TYPE_SELECTOR = selector.SelectSelector(
     selector.SelectSelectorConfig(options=["door", "window"], translation_key="contact_type")
 )
-AREA_SELECTOR = selector.AreaSelector()
 LEARNING_ACTION_ADD = "add_another"
 LEARNING_ACTION_DONE = "done"
 LEARNING_ACTION_SELECTOR = selector.SelectSelector(
@@ -86,7 +84,7 @@ def _protocol_profile_schema(values: dict[str, Any]) -> vol.Schema:
     return vol.Schema(
         {
             vol.Required("name", default=values.get("name", DEFAULT_PROFILE["name"])): str,
-            vol.Required("payload", default={}): data_entry_flow.section(
+            vol.Required("payload"): data_entry_flow.section(
                 vol.Schema(
                     {
                         vol.Optional("payload_length", default=values.get("payload_length") or 0): vol.All(
@@ -100,7 +98,7 @@ def _protocol_profile_schema(values: dict[str, Any]) -> vol.Schema:
                 ),
                 {"collapsed": False},
             ),
-            vol.Required("codes", default={}): data_entry_flow.section(
+            vol.Required("codes"): data_entry_flow.section(
                 vol.Schema(
                     {
                         vol.Required("open_code", default=values.get("open_code", "0A")): str,
@@ -111,26 +109,6 @@ def _protocol_profile_schema(values: dict[str, Any]) -> vol.Schema:
                 ),
                 {"collapsed": False},
             ),
-        }
-    )
-
-
-def _profile_schema(values: dict[str, Any]) -> vol.Schema:
-    """Build the editable protocol profile schema with suggested defaults."""
-    return vol.Schema(
-        {
-            vol.Required("name", default=values.get("name", DEFAULT_PROFILE["name"])): str,
-            vol.Optional("payload_length", default=values.get("payload_length") or 0): vol.All(
-                vol.Coerce(int), vol.Range(min=0)
-            ),
-            vol.Required("device_start", default=values.get("device_start", 0)): vol.Coerce(int),
-            vol.Required("device_length", default=values.get("device_length", 4)): vol.Coerce(int),
-            vol.Required("event_start", default=values.get("event_start", 4)): vol.Coerce(int),
-            vol.Required("event_length", default=values.get("event_length", 2)): vol.Coerce(int),
-            vol.Required("open_code", default=values.get("open_code", "0A")): str,
-            vol.Required("closed_code", default=values.get("closed_code", "0E")): str,
-            vol.Optional("tamper_code", default=values.get("tamper_code") or ""): str,
-            vol.Optional("battery_code", default=values.get("battery_code") or ""): str,
         }
     )
 
@@ -199,17 +177,20 @@ class RF433ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         """Collect the bridge source settings."""
         errors: dict[str, str] = {}
         if user_input is not None:
+            values = dict(user_input)
+            duplicate_interval = values.pop(CONF_DUPLICATE_INTERVAL)
             try:
-                topic = mqtt.valid_subscribe_topic(user_input[CONF_TOPIC])
+                topic = mqtt.valid_subscribe_topic(values[CONF_TOPIC])
             except vol.Invalid:
                 errors[CONF_TOPIC] = "invalid_topic"
             else:
                 if not await mqtt.async_wait_for_mqtt_client(self.hass):
                     errors["base"] = "mqtt_unavailable"
                 else:
-                    self._entry_data = dict(user_input)
+                    self._entry_data = values
                     self._entry_data[CONF_TOPIC] = topic
                     self._entry_data.setdefault(CONF_JSON_PATH, DEFAULT_JSON_PATH)
+                    self._pending_options[CONF_DUPLICATE_INTERVAL] = duplicate_interval
                     return await self.async_step_protocol()
         schema = vol.Schema(
             {
@@ -217,6 +198,10 @@ class RF433ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                 vol.Required(CONF_TOPIC, default=DEFAULT_MQTT_TOPIC): str,
                 vol.Required(CONF_PAYLOAD_FORMAT, default=FORMAT_JSON): FORMAT_SELECTOR,
                 vol.Optional(CONF_JSON_PATH, default=DEFAULT_JSON_PATH): str,
+                vol.Required(
+                    CONF_DUPLICATE_INTERVAL,
+                    default=DEFAULT_OPTIONS[CONF_DUPLICATE_INTERVAL],
+                ): vol.All(vol.Coerce(float), vol.Range(min=0, max=60)),
             }
         )
         return self.async_show_form(step_id="user", data_schema=schema, errors=errors)
@@ -413,6 +398,8 @@ class RF433ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                         **user_input,
                         "rf_id": rf_id,
                         "profile_id": self._scan_profile["id"],
+                        "tamper_enabled": True,
+                        "battery_enabled": True,
                     }
                 )
                 return await self.async_step_onboarding()
@@ -424,12 +411,6 @@ class RF433ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                     vol.Required("name", default=values.get("name", "")): str,
                     vol.Required("rf_id", default=values.get("rf_id", "")): str,
                     vol.Required("contact_type", default=values.get("contact_type", "door")): TYPE_SELECTOR,
-                    vol.Optional(
-                        CONF_AREA_ID,
-                        description={"suggested_value": values.get(CONF_AREA_ID)},
-                    ): AREA_SELECTOR,
-                    vol.Required("tamper_enabled", default=values.get("tamper_enabled", True)): bool,
-                    vol.Required("battery_enabled", default=values.get("battery_enabled", True)): bool,
                 }
             ),
             errors=errors,
@@ -476,6 +457,8 @@ class RF433OptionsFlow(config_entries.OptionsFlow):
         self._scan_current_id: str | None = None
         self._learn_session: PreviewSession | None = None
         self._learn_callback: Callable[[str], None] | None = None
+        self._profile_session: PreviewSession | None = None
+        self._profile_callback: Callable[[str], None] | None = None
 
     @staticmethod
     async def async_setup_preview(hass) -> None:
@@ -483,10 +466,12 @@ class RF433OptionsFlow(config_entries.OptionsFlow):
         await async_register_preview(hass)
 
     async def async_step_init(self, user_input=None):
+        self._stop_learn_scan()
+        self._stop_profile_scan()
         self.options = deepcopy({**DEFAULT_OPTIONS, **self.config_entry.options})
         return self.async_show_menu(
             step_id="init",
-            menu_options=["bridge", "add_sensor", "learn", "sensors", "profiles", "unknown", "information"],
+            menu_options=["bridge", "learn", "add_sensor", "sensors", "profiles", "unknown", "information"],
         )
 
     async def async_step_bridge(self, user_input=None):
@@ -500,12 +485,17 @@ class RF433OptionsFlow(config_entries.OptionsFlow):
                 data = dict(self.config_entry.data)
                 data.update(
                     {
+                        CONF_NAME: user_input[CONF_NAME],
                         CONF_TOPIC: topic,
                         CONF_PAYLOAD_FORMAT: user_input[CONF_PAYLOAD_FORMAT],
                         CONF_JSON_PATH: user_input[CONF_JSON_PATH],
                     }
                 )
-                self.hass.config_entries.async_update_entry(self.config_entry, data=data)
+                self.hass.config_entries.async_update_entry(
+                    self.config_entry,
+                    title=user_input[CONF_NAME],
+                    data=data,
+                )
                 self.options[CONF_DUPLICATE_INTERVAL] = user_input[CONF_DUPLICATE_INTERVAL]
                 return self.async_create_entry(data=self.options)
         values = {
@@ -517,6 +507,7 @@ class RF433OptionsFlow(config_entries.OptionsFlow):
             step_id="bridge",
             data_schema=vol.Schema(
                 {
+                    vol.Required(CONF_NAME, default=values.get(CONF_NAME, self.config_entry.title)): str,
                     vol.Required(CONF_TOPIC, default=values[CONF_TOPIC]): str,
                     vol.Required(CONF_PAYLOAD_FORMAT, default=values[CONF_PAYLOAD_FORMAT]): FORMAT_SELECTOR,
                     vol.Optional(CONF_JSON_PATH, default=values.get(CONF_JSON_PATH, DEFAULT_JSON_PATH)): str,
@@ -570,6 +561,8 @@ class RF433OptionsFlow(config_entries.OptionsFlow):
                     "rf_id": rf_id,
                     "id": (initial or {}).get("id", str(uuid4())),
                 }
+                item.setdefault("tamper_enabled", True)
+                item.setdefault("battery_enabled", True)
                 if initial:
                     self.options[CONF_SENSORS] = [
                         item if sensor["id"] == item["id"] else sensor for sensor in self.options[CONF_SENSORS]
@@ -582,14 +575,11 @@ class RF433OptionsFlow(config_entries.OptionsFlow):
             {
                 vol.Required("name", default=values.get("name", "")): str,
                 vol.Required("rf_id", default=values.get("rf_id", self._learned or "")): str,
+                vol.Required("contact_type", default=values.get("contact_type", "door")): TYPE_SELECTOR,
                 vol.Required(
                     "profile_id",
                     default=values.get("profile_id", self._learn_profile or DEFAULT_PROFILE_ID),
                 ): self._profile_selector(),
-                vol.Required("contact_type", default=values.get("contact_type", "door")): TYPE_SELECTOR,
-                vol.Optional(CONF_AREA_ID, description={"suggested_value": values.get(CONF_AREA_ID)}): AREA_SELECTOR,
-                vol.Required("tamper_enabled", default=values.get("tamper_enabled", True)): bool,
-                vol.Required("battery_enabled", default=values.get("battery_enabled", True)): bool,
             }
         )
         return self.async_show_form(
@@ -604,6 +594,7 @@ class RF433OptionsFlow(config_entries.OptionsFlow):
         )
 
     async def async_step_learn(self, user_input=None):
+        self._stop_profile_scan()
         if user_input is not None:
             self._learn_profile = user_input["profile_id"]
             self._scan_detections = {}
@@ -709,7 +700,7 @@ class RF433OptionsFlow(config_entries.OptionsFlow):
             return self.async_abort(reason="no_sensors")
         if user_input is not None:
             self._selected = user_input["sensor"]
-            return self.async_show_menu(step_id="sensor_action", menu_options=["edit_sensor", "delete_sensor"])
+            return await self.async_step_edit_sensor()
         choices = [_select_option(sensor["id"], sensor["name"]) for sensor in self.options[CONF_SENSORS]]
         return self.async_show_form(
             step_id="sensors",
@@ -736,6 +727,7 @@ class RF433OptionsFlow(config_entries.OptionsFlow):
         )
 
     async def async_step_profiles(self, user_input=None):
+        self._stop_profile_scan()
         return self.async_show_menu(step_id="profiles", menu_options=["add_profile", "edit_profile", "delete_profile"])
 
     async def async_step_add_profile(self, user_input=None):
@@ -745,15 +737,17 @@ class RF433OptionsFlow(config_entries.OptionsFlow):
         errors: dict[str, str] = {}
         if user_input is not None:
             profile_id = (initial or {}).get("id", str(uuid4()))
+            profile_values = _flatten_protocol_profile(user_input)
             try:
                 item = normalize_profile(
-                    user_input,
+                    profile_values,
                     profile_id,
                     builtin=profile_id == DEFAULT_PROFILE_ID,
                 )
             except ProfileValidationError as err:
-                errors[err.field if err.field in user_input else "base"] = "invalid_profile"
+                errors[err.field if err.field == "name" else "base"] = "invalid_profile"
             else:
+                self._stop_profile_scan()
                 replaced = False
                 profiles = []
                 for profile in self.options[CONF_PROFILES]:
@@ -766,8 +760,42 @@ class RF433OptionsFlow(config_entries.OptionsFlow):
                     profiles.append(item)
                 self.options[CONF_PROFILES] = profiles
                 return self.async_create_entry(data=self.options)
-        values = user_input or initial or {}
-        return self.async_show_form(step_id=step, data_schema=_profile_schema(values), errors=errors)
+        values = user_input or initial or DEFAULT_PROFILE
+        if self._profile_callback is None:
+            await self._async_start_profile_scan(initial or DEFAULT_PROFILE)
+        return self.async_show_form(
+            step_id=step,
+            data_schema=_protocol_profile_schema(values),
+            errors=errors,
+            last_step=False,
+            preview=DOMAIN,
+        )
+
+    async def _async_start_profile_scan(self, profile: dict[str, Any]) -> None:
+        """Render live protocol-profile feedback in the options dialog."""
+        manager = self.config_entry.runtime_data
+        session = PreviewSession(
+            data={"profile": deepcopy(profile), "latest": manager.last_received_payload},
+            renderer=render_profile_preview,
+        )
+        self._profile_session = session
+        register_preview_session(self.hass, self.flow_id, session)
+
+        @callback
+        def received(payload: str) -> None:
+            session.data["latest"] = payload
+            session.publish()
+
+        self._profile_callback = received
+        manager.scan_callbacks.add(received)
+
+    @callback
+    def _stop_profile_scan(self) -> None:
+        if self._profile_callback is not None:
+            self.config_entry.runtime_data.scan_callbacks.discard(self._profile_callback)
+            self._profile_callback = None
+        self._profile_session = None
+        remove_preview_session(self.hass, self.flow_id)
 
     async def async_step_edit_profile(self, user_input=None):
         return await self._select_profile("edit_profile_form", user_input, True)
@@ -873,5 +901,6 @@ class RF433OptionsFlow(config_entries.OptionsFlow):
 
     @callback
     def async_remove(self) -> None:
-        """Release the manager scan callback when the flow closes."""
+        """Release manager scan callbacks when the flow closes."""
         self._stop_learn_scan()
+        self._stop_profile_scan()

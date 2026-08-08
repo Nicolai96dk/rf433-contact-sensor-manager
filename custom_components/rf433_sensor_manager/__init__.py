@@ -51,9 +51,10 @@ def _remove_stale_registry_items(hass: HomeAssistant, entry: ConfigEntry, sensor
     """Remove entities and devices belonging to sensors deleted in the UI."""
     entity_registry = er.async_get(hass)
     valid_prefixes = tuple(f"{entry.entry_id}_{sensor_id}_" for sensor_id in sensor_ids)
+    hub_prefix = f"{entry.entry_id}_hub_"
     for entity_entry in er.async_entries_for_config_entry(entity_registry, entry.entry_id):
         if entity_entry.unique_id.startswith(f"{entry.entry_id}_") and not entity_entry.unique_id.startswith(
-            valid_prefixes
+            (*valid_prefixes, hub_prefix)
         ):
             entity_registry.async_remove(entity_entry.entity_id)
 

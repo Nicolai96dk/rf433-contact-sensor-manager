@@ -13,6 +13,7 @@ from pytest_homeassistant_custom_component.common import MockConfigEntry
 from voluptuous_serialize import convert
 
 from custom_components.rf433_sensor_manager.const import (
+    CONF_DUPLICATE_INTERVAL,
     CONF_JSON_PATH,
     CONF_NAME,
     CONF_PAYLOAD_FORMAT,
@@ -21,10 +22,31 @@ from custom_components.rf433_sensor_manager.const import (
     DEFAULT_JSON_PATH,
     DEFAULT_MQTT_TOPIC,
     DEFAULT_OPTIONS,
+    DEFAULT_PROFILE,
     DOMAIN,
     FORMAT_JSON,
 )
 from custom_components.rf433_sensor_manager.preview import render_learning_preview, render_profile_preview
+
+
+def default_protocol_input() -> dict:
+    """Return the values that Home Assistant's form frontend builds from child defaults."""
+    return {
+        "name": DEFAULT_PROFILE["name"],
+        "payload": {
+            "payload_length": DEFAULT_PROFILE["payload_length"],
+            "device_start": DEFAULT_PROFILE["device_start"],
+            "device_length": DEFAULT_PROFILE["device_length"],
+            "event_start": DEFAULT_PROFILE["event_start"],
+            "event_length": DEFAULT_PROFILE["event_length"],
+        },
+        "codes": {
+            "open_code": DEFAULT_PROFILE["open_code"],
+            "closed_code": DEFAULT_PROFILE["closed_code"],
+            "tamper_code": DEFAULT_PROFILE["tamper_code"],
+            "battery_code": DEFAULT_PROFILE["battery_code"],
+        },
+    }
 
 
 @pytest.mark.usefixtures("enable_custom_integrations")
@@ -53,6 +75,7 @@ async def test_user_flow_loads_with_tasmota_defaults(hass, hass_ws_client, monke
     defaults = result["data_schema"]({})
     assert defaults[CONF_NAME] == DEFAULT_BRIDGE_NAME
     assert defaults[CONF_TOPIC] == DEFAULT_MQTT_TOPIC
+    assert defaults[CONF_DUPLICATE_INTERVAL] == 1.0
 
     result = await hass.config_entries.flow.async_configure(result["flow_id"], defaults)
     assert result["type"] is FlowResultType.FORM
@@ -62,6 +85,21 @@ async def test_user_flow_loads_with_tasmota_defaults(hass, hass_ws_client, monke
     assert [field["name"] for field in serialized] == ["name", "payload", "codes"]
     assert serialized[1]["type"] == "expandable"
     assert serialized[2]["type"] == "expandable"
+    assert "default" not in serialized[1]
+    assert "default" not in serialized[2]
+    assert {field["name"]: field.get("default") for field in serialized[1]["schema"]} == {
+        "payload_length": 6,
+        "device_start": 0,
+        "device_length": 4,
+        "event_start": 4,
+        "event_length": 2,
+    }
+    assert {field["name"]: field.get("default") for field in serialized[2]["schema"]} == {
+        "open_code": "0A",
+        "closed_code": "0E",
+        "tamper_code": "07",
+        "battery_code": "06",
+    }
     session = hass.data[DOMAIN]["preview_sessions"][result["flow_id"]]
     assert session.data["profile"]["open_code"] == "0A"
     callbacks[-1](
@@ -72,7 +110,7 @@ async def test_user_flow_loads_with_tasmota_defaults(hass, hass_ws_client, monke
     )
     assert session.data["latest"] == "6F620A"
 
-    profile_input = result["data_schema"]({})
+    profile_input = result["data_schema"](default_protocol_input())
     assert profile_input["payload"] == {
         "payload_length": 6,
         "device_start": 0,
@@ -125,7 +163,7 @@ async def test_setup_scan_is_live_until_done_and_seeds_sensor(hass, hass_ws_clie
     monkeypatch.setattr(mqtt, "async_subscribe", mqtt_subscribe)
     result = await hass.config_entries.flow.async_init(DOMAIN, context={"source": config_entries.SOURCE_USER})
     result = await hass.config_entries.flow.async_configure(result["flow_id"], result["data_schema"]({}))
-    profile_input = result["data_schema"]({})
+    profile_input = result["data_schema"](default_protocol_input())
     result = await hass.config_entries.flow.async_configure(result["flow_id"], profile_input)
     result = await hass.config_entries.flow.async_configure(result["flow_id"], {"next_step_id": "scan"})
 
@@ -228,7 +266,14 @@ async def test_bridge_options_schema_is_serializable(hass) -> None:
 
     assert result["type"] is FlowResultType.FORM
     assert result["step_id"] == "bridge"
-    assert convert(result["data_schema"], custom_serializer=cv.custom_serializer)
+    serialized = convert(result["data_schema"], custom_serializer=cv.custom_serializer)
+    assert [field["name"] for field in serialized] == [
+        "name",
+        "topic",
+        "payload_format",
+        "json_path",
+        "duplicate_interval",
+    ]
 
 
 @pytest.mark.usefixtures("enable_custom_integrations")
@@ -271,4 +316,108 @@ async def test_options_learning_pushes_devices_until_done(hass) -> None:
     assert sensor["initial_contact"] is False
     assert "area_id" not in sensor
     assert sensor["contact_type"] == "window"
+    assert not manager.scan_callbacks
+
+
+@pytest.mark.usefixtures("enable_custom_integrations")
+async def test_options_manual_and_sensor_edit_match_guided_setup(hass) -> None:
+    """Manual creation is compact and selecting a sensor opens its editor directly."""
+    sensor = {
+        "id": "sensor-1",
+        "name": "Hall door",
+        "rf_id": "6F62",
+        "profile_id": DEFAULT_PROFILE["id"],
+        "contact_type": "door",
+        "tamper_enabled": True,
+        "battery_enabled": True,
+    }
+    manager = SimpleNamespace(scan_callbacks=set())
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        title=DEFAULT_BRIDGE_NAME,
+        data={
+            CONF_NAME: DEFAULT_BRIDGE_NAME,
+            CONF_TOPIC: DEFAULT_MQTT_TOPIC,
+            CONF_PAYLOAD_FORMAT: FORMAT_JSON,
+            CONF_JSON_PATH: DEFAULT_JSON_PATH,
+        },
+        options={**deepcopy(DEFAULT_OPTIONS), "sensors": [sensor]},
+        version=3,
+    )
+    entry.runtime_data = manager
+    entry.add_to_hass(hass)
+
+    result = await hass.config_entries.options.async_init(entry.entry_id)
+    assert result["menu_options"] == [
+        "bridge",
+        "learn",
+        "add_sensor",
+        "sensors",
+        "profiles",
+        "unknown",
+        "information",
+    ]
+    manual = await hass.config_entries.options.async_configure(result["flow_id"], {"next_step_id": "add_sensor"})
+    assert manual.get("preview") is None
+    assert [field["name"] for field in convert(manual["data_schema"], custom_serializer=cv.custom_serializer)] == [
+        "name",
+        "rf_id",
+        "contact_type",
+        "profile_id",
+    ]
+
+    result = await hass.config_entries.options.async_init(entry.entry_id)
+    result = await hass.config_entries.options.async_configure(result["flow_id"], {"next_step_id": "sensors"})
+    result = await hass.config_entries.options.async_configure(result["flow_id"], {"sensor": "sensor-1"})
+    assert result["type"] is FlowResultType.FORM
+    assert result["step_id"] == "edit_sensor"
+    assert [field["name"] for field in convert(result["data_schema"], custom_serializer=cv.custom_serializer)] == [
+        "name",
+        "rf_id",
+        "contact_type",
+        "profile_id",
+    ]
+
+
+@pytest.mark.usefixtures("enable_custom_integrations")
+async def test_options_profile_uses_sections_defaults_and_live_preview(hass) -> None:
+    """Create/edit profile uses the onboarding form and consumes live RF messages."""
+    manager = SimpleNamespace(scan_callbacks=set(), last_received_payload="6F620A")
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        title=DEFAULT_BRIDGE_NAME,
+        data={
+            CONF_NAME: DEFAULT_BRIDGE_NAME,
+            CONF_TOPIC: DEFAULT_MQTT_TOPIC,
+            CONF_PAYLOAD_FORMAT: FORMAT_JSON,
+            CONF_JSON_PATH: DEFAULT_JSON_PATH,
+        },
+        options=deepcopy(DEFAULT_OPTIONS),
+        version=3,
+    )
+    entry.runtime_data = manager
+    entry.add_to_hass(hass)
+
+    result = await hass.config_entries.options.async_init(entry.entry_id)
+    result = await hass.config_entries.options.async_configure(result["flow_id"], {"next_step_id": "profiles"})
+    result = await hass.config_entries.options.async_configure(result["flow_id"], {"next_step_id": "add_profile"})
+
+    assert result["type"] is FlowResultType.FORM
+    assert result["step_id"] == "add_profile"
+    assert result["preview"] == DOMAIN
+    serialized = convert(result["data_schema"], custom_serializer=cv.custom_serializer)
+    assert [field["name"] for field in serialized] == ["name", "payload", "codes"]
+    assert serialized[1]["schema"][0]["default"] == 6
+    assert serialized[2]["schema"][0]["default"] == "0A"
+    session = hass.data[DOMAIN]["preview_sessions"][result["flow_id"]]
+    assert session.data["latest"] == "6F620A"
+    callback = next(iter(manager.scan_callbacks))
+    callback("6F620E")
+    assert session.data["latest"] == "6F620E"
+
+    values = default_protocol_input()
+    values["name"] = "My contact profile"
+    result = await hass.config_entries.options.async_configure(result["flow_id"], values)
+    assert result["type"] is FlowResultType.CREATE_ENTRY
+    assert result["data"]["profiles"][0]["name"] == "My contact profile"
     assert not manager.scan_callbacks

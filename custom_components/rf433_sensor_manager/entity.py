@@ -24,3 +24,23 @@ class RF433Entity(Entity):
     async def async_added_to_hass(self):
         self.runtime.listeners.add(self.async_write_ha_state)
         self.async_on_remove(lambda: self.runtime.listeners.discard(self.async_write_ha_state))
+
+
+class RF433HubEntity(Entity):
+    """Base entity attached to the RF bridge device."""
+
+    _attr_has_entity_name = True
+
+    def __init__(self, manager, suffix: str) -> None:
+        self.manager = manager
+        self._attr_unique_id = f"{manager.entry.entry_id}_hub_{suffix}"
+        self._attr_device_info = DeviceInfo(
+            identifiers={(DOMAIN, manager.entry.entry_id)},
+            name=manager.entry.title,
+            manufacturer="RF433 Sensor Manager",
+            model="MQTT RF Bridge",
+        )
+
+    async def async_added_to_hass(self):
+        self.manager.listeners.add(self.async_write_ha_state)
+        self.async_on_remove(lambda: self.manager.listeners.discard(self.async_write_ha_state))
