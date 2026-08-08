@@ -10,7 +10,8 @@
           "name": "Bridge name",
           "topic": "MQTT topic",
           "payload_format": "Payload format",
-          "json_path": "JSON path"
+          "json_path": "JSON path",
+          "duplicate_interval": "Duplicate suppression (seconds)"
         },
         "data_description": {
           "topic": "The Tasmota default is tele/rf_bridge/RESULT. MQTT wildcards + and # are supported.",
@@ -124,10 +125,7 @@
         "data": {
           "name": "Name",
           "rf_id": "RF device ID",
-          "contact_type": "Contact type",
-          "area_id": "Area (optional)",
-          "tamper_enabled": "Enable tamper",
-          "battery_enabled": "Enable low battery"
+          "contact_type": "Contact type"
         }
       }
     },
@@ -163,7 +161,9 @@
       },
       "bridge": {
         "title": "RF bridge settings",
+        "description": "Uses Home Assistant's existing MQTT connection.",
         "data": {
+          "name": "Bridge name",
           "topic": "MQTT topic",
           "payload_format": "Payload format",
           "json_path": "JSON path",
@@ -171,15 +171,13 @@
         }
       },
       "add_sensor": {
-        "title": "Add sensor",
+        "title": "Add sensor manually",
+        "description": "Enter the exact RF device ID extracted by the selected protocol.",
         "data": {
-          "name": "Name",
+          "name": "Device name",
           "rf_id": "RF device ID",
-          "profile_id": "Protocol profile",
           "contact_type": "Contact type",
-          "area_id": "Area (optional)",
-          "tamper_enabled": "Enable tamper",
-          "battery_enabled": "Enable low battery"
+          "profile_id": "Protocol profile"
         }
       },
       "learn": {
@@ -244,13 +242,10 @@
       "edit_sensor": {
         "title": "Edit sensor",
         "data": {
-          "name": "Name",
+          "name": "Device name",
           "rf_id": "RF device ID",
-          "profile_id": "Protocol profile",
           "contact_type": "Contact type",
-          "area_id": "Area (optional)",
-          "tamper_enabled": "Enable tamper",
-          "battery_enabled": "Enable low battery"
+          "profile_id": "Protocol profile"
         }
       },
       "delete_sensor": {
@@ -270,17 +265,30 @@
       },
       "add_profile": {
         "title": "Create protocol profile",
+        "description": "**Live scanning is active.** Trigger an RF sensor to test this profile. The preview below shows the latest complete RF code and interprets it immediately using the values entered here.",
         "data": {
-          "name": "Name",
-          "payload_length": "Expected payload length",
-          "device_start": "Device ID start",
-          "device_length": "Device ID length",
-          "event_start": "Event start",
-          "event_length": "Event length",
-          "open_code": "Open code",
-          "closed_code": "Closed code",
-          "tamper_code": "Tamper code (optional)",
-          "battery_code": "Low-battery code (optional)"
+          "name": "Profile name"
+        },
+        "sections": {
+          "payload": {
+            "name": "Payload",
+            "data": {
+              "payload_length": "Expected payload length",
+              "device_start": "Device ID start",
+              "device_length": "Device ID length",
+              "event_start": "Event start",
+              "event_length": "Event length"
+            }
+          },
+          "codes": {
+            "name": "Codes",
+            "data": {
+              "open_code": "Open code",
+              "closed_code": "Closed code",
+              "tamper_code": "Tamper code (optional)",
+              "battery_code": "Low-battery code (optional)"
+            }
+          }
         }
       },
       "edit_profile": {
@@ -291,17 +299,30 @@
       },
       "edit_profile_form": {
         "title": "Edit protocol profile",
+        "description": "**Live scanning is active.** Trigger an RF sensor to test this profile. The preview below shows the latest complete RF code and interprets it immediately using the values entered here.",
         "data": {
-          "name": "Name",
-          "payload_length": "Expected payload length",
-          "device_start": "Device ID start",
-          "device_length": "Device ID length",
-          "event_start": "Event start",
-          "event_length": "Event length",
-          "open_code": "Open code",
-          "closed_code": "Closed code",
-          "tamper_code": "Tamper code (optional)",
-          "battery_code": "Low-battery code (optional)"
+          "name": "Profile name"
+        },
+        "sections": {
+          "payload": {
+            "name": "Payload",
+            "data": {
+              "payload_length": "Expected payload length",
+              "device_start": "Device ID start",
+              "device_length": "Device ID length",
+              "event_start": "Event start",
+              "event_length": "Event length"
+            }
+          },
+          "codes": {
+            "name": "Codes",
+            "data": {
+              "open_code": "Open code",
+              "closed_code": "Closed code",
+              "tamper_code": "Tamper code (optional)",
+              "battery_code": "Low-battery code (optional)"
+            }
+          }
         }
       },
       "delete_profile": {
@@ -327,12 +348,10 @@
         "title": "Create sensor from signal",
         "description": "Raw RF code: {raw}\nDetected device ID: {device}\nDetected event: {event}",
         "data": {
-          "name": "Name",
+          "name": "Device name",
           "rf_id": "RF device ID",
-          "profile_id": "Protocol profile",
           "contact_type": "Contact type",
-          "tamper_enabled": "Enable tamper",
-          "battery_enabled": "Enable low battery"
+          "profile_id": "Protocol profile"
         }
       },
       "information": {
@@ -398,6 +417,21 @@
       },
       "last_tamper": {
         "name": "Last tamper"
+      },
+      "latest_rf_signal": {
+        "name": "Latest RF signal"
+      },
+      "last_rf_signal": {
+        "name": "Last RF signal"
+      },
+      "rf_messages_received": {
+        "name": "RF messages received"
+      },
+      "configured_sensors": {
+        "name": "Configured sensors"
+      },
+      "unknown_rf_signals": {
+        "name": "Unknown RF signals"
       }
     },
     "event": {

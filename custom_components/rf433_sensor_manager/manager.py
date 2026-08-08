@@ -67,6 +67,7 @@ class RF433Manager:
         self._unsub: Callable[[], None] | None = None
         self._store: Store[dict[str, Any]] = Store(hass, STORE_VERSION, f"{DOMAIN}.{entry.entry_id}")
         self.scan_callbacks: set[Callable[[str], None]] = set()
+        self.listeners: set[Callable[[], None]] = set()
         self.last_received_payload: str | None = None
         self.last_received_at: str | None = None
 
@@ -107,6 +108,7 @@ class RF433Manager:
         if payload is None:
             self.stats["malformed"] += 1
             _LOGGER.debug("Ignoring malformed RF message on %s", message.topic)
+            self._notify()
             return
         self.last_received_payload = payload
         self.last_received_at = dt_util.utcnow().isoformat()
@@ -116,10 +118,18 @@ class RF433Manager:
         now_mono = monotonic()
         if interval and now_mono - self._recent.get(payload, -interval) < interval:
             self.stats["duplicates"] += 1
+            self._notify()
             return
         self._recent[payload] = now_mono
         self._recent = {k: v for k, v in self._recent.items() if now_mono - v <= max(interval, 1)}
         self._process(payload)
+        self._notify()
+
+    @callback
+    def _notify(self) -> None:
+        """Update bridge-level diagnostic entities."""
+        for listener in tuple(self.listeners):
+            listener()
 
     @callback
     def _process(self, payload: str) -> None:
