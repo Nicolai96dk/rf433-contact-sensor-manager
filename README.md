@@ -13,7 +13,7 @@ A UI-configured Home Assistant custom integration that converts raw RF433 messag
 - Built-in **DS-4 / Generic Contact Sensor** protocol (`AAAAEE`: four-character ID and two-character event)
 - Reusable custom protocol profiles and exact RF-ID matching
 - Manual, learn-mode, and recent-unknown-signal sensor creation
-- ZHA-style live MQTT adoption that immediately lists every protocol-compatible RF device and runs until **Done**
+- Live MQTT adoption that immediately shows the latest protocol-compatible RF signal and runs until **Done**
 - Door/window contact, latched low battery, native tamper event, last message, last seen, and battery-reset button
 - Persistent contact/battery/history state, bounded unknown history, diagnostics, and stable device/entity identifiers
 - Entirely native Home Assistant config and options flows; no YAML or custom frontend
@@ -35,7 +35,7 @@ Each entry represents one RF bridge. The setup form starts with **Tasmota Sonoff
 
 The default profile recognizes six hexadecimal characters: the first four are the exact sensor ID and the final two map `0A` open, `0E` closed, `07` tamper, and `06` low battery. These values are shown during initial setup and can be edited for another protocol. Low battery remains set until **Battery replaced** is pressed. Open/close messages never clear it.
 
-Protocol setup and Scan/Learn mode stay inside Home Assistant's original setup dialog. The protocol form shows the latest RF code and recalculates its interpreted state whenever the code or form values change. Learning keeps listening until **Done scanning** is selected; newly discovered IDs appear immediately in the native preview, and the current device can be named, assigned a door/window type, and placed in an area. Devices already saved during the scan remain listed in the dialog. Learned contact sensors start with the open/closed state of their most recent setup signal. Because RF transmissions are unauthenticated, confirm that a displayed code belongs to the intended sensor.
+Protocol setup and Scan/Learn mode stay inside Home Assistant's original setup dialog. The protocol form groups payload positions and event codes into clear sections, shows the latest RF code, and recalculates its interpreted state whenever the code or form values change. Learning shows only the latest received RF code; the name and door/window type apply to the device ID extracted from that signal. Choose **Add another sensor** to keep scanning or **Done** to save and finish. Areas can be assigned afterward from Home Assistant's device settings. Learned contact sensors start with the open/closed state of their most recent setup signal. Because RF transmissions are unauthenticated, confirm that a displayed code belongs to the intended sensor.
 
 Diagnostics retain up to 100 distinct full RF codes per configured device ID, including unmapped event suffixes such as `01`. Each record includes its event code, recognition status, first/latest reception time, and count. Unknown-signal history is also limited to 100 distinct raw codes.
 

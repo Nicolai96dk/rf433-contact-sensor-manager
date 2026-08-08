@@ -21,7 +21,6 @@ from custom_components.rf433_sensor_manager.const import (
     DEFAULT_JSON_PATH,
     DEFAULT_MQTT_TOPIC,
     DEFAULT_OPTIONS,
-    DEFAULT_PROFILE,
     DOMAIN,
     FORMAT_JSON,
 )
@@ -59,7 +58,10 @@ async def test_user_flow_loads_with_tasmota_defaults(hass, hass_ws_client, monke
     assert result["type"] is FlowResultType.FORM
     assert result["step_id"] == "protocol"
     assert result["preview"] == DOMAIN
-    assert convert(result["data_schema"], custom_serializer=cv.custom_serializer)
+    serialized = convert(result["data_schema"], custom_serializer=cv.custom_serializer)
+    assert [field["name"] for field in serialized] == ["name", "payload", "codes"]
+    assert serialized[1]["type"] == "expandable"
+    assert serialized[2]["type"] == "expandable"
     session = hass.data[DOMAIN]["preview_sessions"][result["flow_id"]]
     assert session.data["profile"]["open_code"] == "0A"
     callbacks[-1](
@@ -70,9 +72,25 @@ async def test_user_flow_loads_with_tasmota_defaults(hass, hass_ws_client, monke
     )
     assert session.data["latest"] == "6F620A"
 
-    profile_input = {key: value for key, value in DEFAULT_PROFILE.items() if key not in {"id", "builtin"}}
+    profile_input = result["data_schema"]({})
+    assert profile_input["payload"] == {
+        "payload_length": 6,
+        "device_start": 0,
+        "device_length": 4,
+        "event_start": 4,
+        "event_length": 2,
+    }
+    assert profile_input["codes"] == {
+        "open_code": "0A",
+        "closed_code": "0E",
+        "tamper_code": "07",
+        "battery_code": "06",
+    }
     preview = render_profile_preview(session.data, profile_input)
     assert preview["state"] == "Identified 6F620A: Open"
+    changed_profile = deepcopy(profile_input)
+    changed_profile["codes"]["open_code"] = "FF"
+    assert render_profile_preview(session.data, changed_profile)["state"] == "Identified 6F620A: Unknown event 0A"
     client = await hass_ws_client(hass)
     await client.send_json_auto_id(
         {
@@ -93,7 +111,7 @@ async def test_user_flow_loads_with_tasmota_defaults(hass, hass_ws_client, monke
 
 @pytest.mark.usefixtures("enable_custom_integrations")
 async def test_setup_scan_is_live_until_done_and_seeds_sensor(hass, hass_ws_client, monkeypatch) -> None:
-    """Discovery pushes new IDs and carries learned state into the sensor."""
+    """Learning shows only the latest signal and seeds its state into the sensor."""
     callbacks = []
 
     async def mqtt_ready(_hass) -> bool:
@@ -107,7 +125,7 @@ async def test_setup_scan_is_live_until_done_and_seeds_sensor(hass, hass_ws_clie
     monkeypatch.setattr(mqtt, "async_subscribe", mqtt_subscribe)
     result = await hass.config_entries.flow.async_init(DOMAIN, context={"source": config_entries.SOURCE_USER})
     result = await hass.config_entries.flow.async_configure(result["flow_id"], result["data_schema"]({}))
-    profile_input = {key: value for key, value in DEFAULT_PROFILE.items() if key not in {"id", "builtin"}}
+    profile_input = result["data_schema"]({})
     result = await hass.config_entries.flow.async_configure(result["flow_id"], profile_input)
     result = await hass.config_entries.flow.async_configure(result["flow_id"], {"next_step_id": "scan"})
 
@@ -127,29 +145,30 @@ async def test_setup_scan_is_live_until_done_and_seeds_sensor(hass, hass_ws_clie
     assert (await client.receive_json())["event"]["state"] == "Waiting for an RF signal…"
     scan_callback = callbacks[-1]
     scan_callback(SimpleNamespace(payload=json.dumps({"RfReceived": {"Data": "ABCD07"}}), topic=DEFAULT_MQTT_TOPIC))
-    assert "ABCD" in (await client.receive_json())["event"]["state"]
+    assert (await client.receive_json())["event"]["state"] == "Identified ABCD07"
     scan_callback(SimpleNamespace(payload=json.dumps({"RfReceived": {"Data": "6F620A"}}), topic=DEFAULT_MQTT_TOPIC))
     pushed = (await client.receive_json())["event"]["state"]
-    assert "Identified Device 6F62" in pushed
-    assert "ABCD" in pushed
+    assert pushed == "Identified 6F620A"
+    assert "ABCD" not in pushed
     session = hass.data[DOMAIN]["preview_sessions"][result["flow_id"]]
-    assert list(session.data["detections"]) == ["ABCD", "6F62"]
+    assert session.data["latest"] == "6F620A"
     assert session.data["current_device_id"] == "6F62"
     preview = render_learning_preview(session.data, {})
-    assert "Identified Device 6F62" in preview["state"]
-    assert "ABCD" in preview["state"]
+    assert preview["state"] == "Identified 6F620A"
 
     result = await hass.config_entries.flow.async_configure(
         result["flow_id"],
-        {"name": "Office window", "contact_type": "window", "area_id": "office", "done": False},
+        {"name": "Office window", "contact_type": "window", "next_action": "add_another"},
     )
     assert result["type"] is FlowResultType.FORM
     serialized = convert(result["data_schema"], custom_serializer=cv.custom_serializer)
-    assert any("Device 6F62" in field.get("selector", {}).get("constant", {}).get("label", "") for field in serialized)
-    assert session.data["current_device_id"] == "ABCD"
+    assert [field["name"] for field in serialized] == ["name", "contact_type", "next_action"]
+    assert serialized[-1]["selector"]["select"]["mode"] == "list"
+    assert session.data["latest"] is None
+    assert session.data["current_device_id"] is None
     result = await hass.config_entries.flow.async_configure(
         result["flow_id"],
-        {"name": "", "contact_type": "door", "done": True},
+        {"name": "", "contact_type": "door", "next_action": "done"},
     )
     assert result["type"] is FlowResultType.MENU
     assert result["step_id"] == "onboarding_configured"
@@ -158,7 +177,7 @@ async def test_setup_scan_is_live_until_done_and_seeds_sensor(hass, hass_ws_clie
     assert result["type"] is FlowResultType.CREATE_ENTRY
     sensor = result["options"]["sensors"][0]
     assert sensor["rf_id"] == "6F62"
-    assert sensor["area_id"] == "office"
+    assert "area_id" not in sensor
     assert sensor["contact_type"] == "window"
     assert sensor["initial_contact"] is True
     assert sensor["initial_payload"] == "6F620A"
@@ -240,21 +259,16 @@ async def test_options_learning_pushes_devices_until_done(hass) -> None:
     callback = next(iter(manager.scan_callbacks))
     callback("6F620E")
     session = hass.data[DOMAIN]["preview_sessions"][result["flow_id"]]
-    assert list(session.data["detections"]) == ["6F62"]
+    assert session.data == {"latest": "6F620E", "current_device_id": "6F62"}
+    assert render_learning_preview(session.data, {})["state"] == "Identified 6F620E"
 
     result = await hass.config_entries.options.async_configure(
         result["flow_id"],
-        {"name": "Kitchen window", "contact_type": "window", "area_id": "kitchen", "done": False},
-    )
-    assert result["type"] is FlowResultType.FORM
-    assert manager.scan_callbacks
-    result = await hass.config_entries.options.async_configure(
-        result["flow_id"],
-        {"name": "", "contact_type": "door", "done": True},
+        {"name": "Kitchen window", "contact_type": "window", "next_action": "done"},
     )
     assert result["type"] is FlowResultType.CREATE_ENTRY
     sensor = result["data"]["sensors"][0]
     assert sensor["initial_contact"] is False
-    assert sensor["area_id"] == "kitchen"
+    assert "area_id" not in sensor
     assert sensor["contact_type"] == "window"
     assert not manager.scan_callbacks
