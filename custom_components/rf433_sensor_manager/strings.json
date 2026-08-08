@@ -35,7 +35,7 @@
       },
       "onboarding": {
         "title": "Add your RF sensors",
-        "description": "Configured during setup: {sensors}. Scan live MQTT traffic, add a sensor manually, or finish and add sensors later from Configure.",
+        "description": "Scan live MQTT traffic, add a sensor manually, or finish and add sensors later from Configure.",
         "menu_options": {
           "scan": "Scan MQTT and learn sensors",
           "manual": "Create a sensor manually",
@@ -43,6 +43,20 @@
         },
         "menu_option_descriptions": {
           "scan": "Listen for RF signals and build a list of identified devices.",
+          "manual": "Enter a known RF device ID.",
+          "finish": "Create the bridge with the configured protocol and sensors."
+        }
+      },
+      "onboarding_configured": {
+        "title": "Add your RF sensors",
+        "description": "Configured during setup: {sensors}. Scan for more devices, add a sensor manually, or finish setup.",
+        "menu_options": {
+          "scan": "Scan MQTT and learn sensors",
+          "manual": "Create a sensor manually",
+          "finish": "Finish setup"
+        },
+        "menu_option_descriptions": {
+          "scan": "Listen for RF signals and build a live list of identified devices.",
           "manual": "Enter a known RF device ID.",
           "finish": "Create the bridge with the configured protocol and sensors."
         }
@@ -93,6 +107,7 @@
           "name": "Name",
           "rf_id": "RF device ID",
           "contact_type": "Contact type",
+          "area_id": "Area (optional)",
           "tamper_enabled": "Enable tamper",
           "battery_enabled": "Enable low battery"
         }
@@ -143,6 +158,7 @@
           "rf_id": "RF device ID",
           "profile_id": "Protocol profile",
           "contact_type": "Contact type",
+          "area_id": "Area (optional)",
           "tamper_enabled": "Enable tamper",
           "battery_enabled": "Enable low battery"
         }
@@ -182,6 +198,7 @@
           "rf_id": "Detected RF device ID",
           "profile_id": "Protocol profile",
           "contact_type": "Contact type",
+          "area_id": "Area (optional)",
           "tamper_enabled": "Enable tamper",
           "battery_enabled": "Enable low battery"
         }
@@ -206,6 +223,7 @@
           "rf_id": "RF device ID",
           "profile_id": "Protocol profile",
           "contact_type": "Contact type",
+          "area_id": "Area (optional)",
           "tamper_enabled": "Enable tamper",
           "battery_enabled": "Enable low battery"
         }
@@ -294,7 +312,7 @@
       },
       "information": {
         "title": "Information",
-        "description": "Configured sensors: {sensors}\nUnknown signals: {unknown}\nMessages received: {received}"
+        "description": "Configured sensors: {sensors}\nUnknown signals: {unknown}\nMessages received: {received}\nLatest RF code: {latest}\nLatest received: {latest_seen}\n\nPer-device RF code history:\n{history}\n\nLast tamper:\n{tamper}"
       }
     },
     "error": {
@@ -345,6 +363,9 @@
       },
       "last_seen": {
         "name": "Last seen"
+      },
+      "last_tamper": {
+        "name": "Last tamper"
       }
     },
     "event": {

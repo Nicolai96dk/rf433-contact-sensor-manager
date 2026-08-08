@@ -111,7 +111,12 @@ def normalize_profile(profile: dict[str, Any], profile_id: str, *, builtin: bool
     return result
 
 
-def record_detection(detections: dict[str, dict[str, Any]], payload: str, profile: dict[str, Any]) -> bool:
+def record_detection(
+    detections: dict[str, dict[str, Any]],
+    payload: str,
+    profile: dict[str, Any],
+    seen_at: str | None = None,
+) -> bool:
     """Add one valid signal to an accumulating scan result."""
     parsed = parse(payload, profile)
     if parsed is None:
@@ -125,13 +130,32 @@ def record_detection(detections: dict[str, dict[str, Any]], payload: str, profil
             "events": [],
             "event_codes": [],
             "last_raw": payload,
+            "last_event": None,
+            "last_seen": seen_at,
+            "codes": {},
         },
     )
     kind = event_kind(event_code, profile)
     item["count"] += 1
     item["last_raw"] = payload
+    item["last_event"] = kind
+    item["last_seen"] = seen_at
     if kind not in item["events"]:
         item["events"].append(kind)
     if event_code not in item["event_codes"]:
         item["event_codes"].append(event_code)
+    code = item["codes"].pop(
+        payload,
+        {
+            "raw": payload,
+            "event_code": event_code,
+            "event": kind,
+            "recognized": kind != "unknown",
+            "first_seen": seen_at,
+            "count": 0,
+        },
+    )
+    code["last_seen"] = seen_at
+    code["count"] += 1
+    item["codes"][payload] = code
     return True

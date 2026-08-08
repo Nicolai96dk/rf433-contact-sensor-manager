@@ -14,12 +14,12 @@ CONF_JSON_PATH = "json_path"
 CONF_DUPLICATE_INTERVAL = "duplicate_interval"
 CONF_PROFILES = "profiles"
 CONF_SENSORS = "sensors"
+CONF_AREA_ID = "area_id"
 FORMAT_JSON = "json"
 FORMAT_RAW = "raw"
 DEFAULT_BRIDGE_NAME = "Tasmota Sonoff RF-bridge"
 DEFAULT_MQTT_TOPIC = "tele/rf_bridge/RESULT"
 DEFAULT_JSON_PATH = "RfReceived.Data"
-SCAN_DURATION = 15
 DEFAULT_PROFILE_ID = "ds4_contact"
 DEFAULT_PROFILE = {
     "id": DEFAULT_PROFILE_ID,
@@ -47,6 +47,9 @@ class SensorRuntime:
     battery_low: bool = False
     last_payload: str | None = None
     last_seen: str | None = None
+    last_event: str | None = None
+    tamper_last_seen: str | None = None
+    code_history: dict[str, dict[str, Any]] = field(default_factory=dict)
     listeners: set[Any] = field(default_factory=set)
 
     def notify(self) -> None:

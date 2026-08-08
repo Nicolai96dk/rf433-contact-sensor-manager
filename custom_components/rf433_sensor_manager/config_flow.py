@@ -2,9 +2,10 @@
 
 from __future__ import annotations
 
-import asyncio
+from collections.abc import Callable
 from copy import deepcopy
 from typing import Any
+from urllib.parse import quote
 from uuid import uuid4
 
 import voluptuous as vol
@@ -14,8 +15,11 @@ from homeassistant.config_entries import ConfigFlowResult
 from homeassistant.core import callback
 from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers import selector
+from homeassistant.helpers.network import NoURLAvailableError, get_url
+from homeassistant.util import dt as dt_util
 
 from .const import (
+    CONF_AREA_ID,
     CONF_DUPLICATE_INTERVAL,
     CONF_JSON_PATH,
     CONF_NAME,
@@ -32,8 +36,8 @@ from .const import (
     DOMAIN,
     FORMAT_JSON,
     FORMAT_RAW,
-    SCAN_DURATION,
 )
+from .panel import PANEL_PATH, LiveSession, async_register_live_panel, register_session, remove_session
 from .protocol import (
     ProfileValidationError,
     extract_payload,
@@ -48,7 +52,7 @@ FORMAT_SELECTOR = selector.SelectSelector(
 TYPE_SELECTOR = selector.SelectSelector(
     selector.SelectSelectorConfig(options=["door", "window"], translation_key="contact_type")
 )
-SCAN_AGAIN = "__scan_again__"
+AREA_SELECTOR = selector.AreaSelector()
 
 
 def _profile_schema(values: dict[str, Any]) -> vol.Schema:
@@ -71,11 +75,28 @@ def _profile_schema(values: dict[str, Any]) -> vol.Schema:
     )
 
 
-def _detection_label(detection: dict[str, Any]) -> str:
-    """Return a compact label for a discovered RF transmitter."""
-    events = ", ".join(detection["events"])
-    codes = ", ".join(detection["event_codes"])
-    return f"{detection['device_id']} — {events} ({codes}) — {detection['count']} signal(s)"
+def _learned_sensor(detection: dict[str, Any], profile_id: str, user_input: dict[str, Any]) -> dict[str, Any]:
+    """Build a sensor configuration seeded from its learned RF state."""
+    name = str(user_input.get("name") or "").strip() or f"RF sensor {detection['device_id']}"
+    item: dict[str, Any] = {
+        "name": name,
+        "rf_id": detection["device_id"],
+        "profile_id": profile_id,
+        "contact_type": "door",
+        "tamper_enabled": True,
+        "battery_enabled": True,
+        "initial_payload": detection["last_raw"],
+        "initial_seen": detection.get("last_seen"),
+        "initial_event": detection.get("last_event"),
+        "initial_code_history": deepcopy(detection.get("codes", {})),
+    }
+    if detection.get("last_event") == "open":
+        item["initial_contact"] = True
+    elif detection.get("last_event") == "closed":
+        item["initial_contact"] = False
+    if area_id := user_input.get(CONF_AREA_ID):
+        item[CONF_AREA_ID] = area_id
+    return item
 
 
 def _select_option(value: str, label: str) -> selector.SelectOptionDict:
@@ -83,19 +104,27 @@ def _select_option(value: str, label: str) -> selector.SelectOptionDict:
     return {"value": value, "label": label}
 
 
+def _live_panel_url(hass, flow_id: str) -> str:
+    """Build an authenticated same-instance URL for the hidden live panel."""
+    try:
+        base_url = get_url(hass, require_current_request=True)
+    except NoURLAvailableError:
+        base_url = get_url(hass, prefer_external=True)
+    return f"{base_url.rstrip('/')}/{PANEL_PATH}?flow_id={quote(flow_id)}"
+
+
 class RF433ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
     """Set up one MQTT RF bridge and its first protocol profile."""
 
-    VERSION = 2
+    VERSION = 3
 
     def __init__(self) -> None:
         self._entry_data: dict[str, Any] = {}
         self._pending_options: dict[str, Any] = deepcopy(DEFAULT_OPTIONS)
         self._scan_profile: dict[str, Any] = deepcopy(DEFAULT_PROFILE)
-        self._scan_task: asyncio.Task[None] | None = None
         self._scan_detections: dict[str, dict[str, Any]] = {}
-        self._scan_error: str | None = None
-        self._selected_detection: dict[str, Any] | None = None
+        self._profile_unsub: Callable[[], None] | None = None
+        self._scan_unsub: Callable[[], None] | None = None
 
     async def async_step_user(self, user_input=None) -> ConfigFlowResult:
         """Collect the bridge source settings."""
@@ -124,34 +153,40 @@ class RF433ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         return self.async_show_form(step_id="user", data_schema=schema, errors=errors)
 
     async def async_step_protocol(self, user_input=None) -> ConfigFlowResult:
-        """Configure the initial reusable protocol profile."""
-        errors: dict[str, str] = {}
+        """Configure the initial profile in a live RF preview panel."""
         if user_input is not None:
             try:
-                self._scan_profile = normalize_profile(user_input, DEFAULT_PROFILE_ID, builtin=True)
-            except ProfileValidationError as err:
-                errors[err.field if err.field in user_input else "base"] = "invalid_profile"
-            else:
-                self._pending_options[CONF_PROFILES] = [deepcopy(self._scan_profile)]
-                return await self.async_step_onboarding()
-        return self.async_show_form(
-            step_id="protocol",
-            data_schema=_profile_schema(user_input or DEFAULT_PROFILE),
-            errors=errors,
-        )
+                profile_input = user_input["profile"]
+                self._scan_profile = normalize_profile(profile_input, DEFAULT_PROFILE_ID, builtin=True)
+            except (KeyError, ProfileValidationError) as err:
+                raise ValueError("Check the profile positions, lengths, and hexadecimal event codes") from err
+            self._stop_profile_reader()
+            self._pending_options[CONF_PROFILES] = [deepcopy(self._scan_profile)]
+            return self.async_external_step_done(next_step_id="onboarding")
+        if self._profile_unsub is None:
+            try:
+                await self._async_start_profile_reader()
+            except HomeAssistantError:
+                return self.async_abort(reason="mqtt_unavailable")
+        return self.async_external_step(step_id="protocol", url=_live_panel_url(self.hass, self.flow_id))
 
-    async def async_step_onboarding(self, user_input=None) -> ConfigFlowResult:
-        """Offer discovery, manual creation, or finishing setup."""
-        return self.async_show_menu(
-            step_id="onboarding",
-            menu_options=["scan", "manual", "finish"],
-            description_placeholders={"sensors": str(len(self._pending_options[CONF_SENSORS]))},
-        )
+    async def _async_start_profile_reader(self) -> None:
+        """Push raw RF samples into the editable profile panel."""
+        await async_register_live_panel(self.hass)
 
-    async def _async_scan_mqtt(self) -> None:
-        """Collect protocol-compatible signals before the entry exists."""
-        self._scan_error = None
-        unsubscribe = None
+        async def done(data: dict[str, Any]) -> None:
+            try:
+                normalize_profile(data["profile"], DEFAULT_PROFILE_ID, builtin=True)
+            except (KeyError, ProfileValidationError) as err:
+                raise ValueError("Check the profile positions, lengths, and hexadecimal event codes") from err
+            await self.hass.config_entries.flow.async_configure(self.flow_id, data)
+
+        session = LiveSession(
+            mode="profile",
+            data={"profile": deepcopy(DEFAULT_PROFILE), "latest": None},
+            async_done=done,
+        )
+        register_session(self.hass, self.flow_id, session)
 
         @callback
         def received(message) -> None:
@@ -164,111 +199,99 @@ class RF433ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             except (ValueError, TypeError, KeyError):
                 return
             if payload is not None:
-                record_detection(self._scan_detections, payload, self._scan_profile)
+                session.data["latest"] = payload
+                session.publish()
 
-        try:
-            if not await mqtt.async_wait_for_mqtt_client(self.hass):
-                self._scan_error = "mqtt_unavailable"
+        self._profile_unsub = await mqtt.async_subscribe(self.hass, self._entry_data[CONF_TOPIC], received)
+
+    @callback
+    def _stop_profile_reader(self) -> None:
+        if self._profile_unsub is not None:
+            self._profile_unsub()
+            self._profile_unsub = None
+        remove_session(self.hass, self.flow_id)
+
+    async def async_step_onboarding(self, user_input=None) -> ConfigFlowResult:
+        """Offer discovery, manual creation, or finishing setup."""
+        sensor_count = len(self._pending_options[CONF_SENSORS])
+        return self.async_show_menu(
+            step_id="onboarding_configured" if sensor_count else "onboarding",
+            menu_options=["scan", "manual", "finish"],
+            description_placeholders={"sensors": str(sensor_count)} if sensor_count else None,
+        )
+
+    async def async_step_onboarding_configured(self, user_input=None) -> ConfigFlowResult:
+        """Return to onboarding after at least one sensor was configured."""
+        return await self.async_step_onboarding(user_input)
+
+    async def _async_start_setup_scan(self) -> None:
+        """Start an open-ended setup scan backed by the live panel."""
+        await async_register_live_panel(self.hass)
+        self._scan_detections = {}
+
+        async def done(data: dict[str, Any]) -> None:
+            await self.hass.config_entries.flow.async_configure(self.flow_id, data)
+
+        session = LiveSession(
+            mode="discovery",
+            data={"title": "Add your RF sensors", "latest": None, "detections": []},
+            async_done=done,
+        )
+        register_session(self.hass, self.flow_id, session)
+
+        @callback
+        def received(message) -> None:
+            try:
+                payload = extract_payload(
+                    message.payload,
+                    self._entry_data[CONF_PAYLOAD_FORMAT],
+                    self._entry_data.get(CONF_JSON_PATH, DEFAULT_JSON_PATH),
+                )
+            except (ValueError, TypeError, KeyError):
                 return
-            unsubscribe = await mqtt.async_subscribe(self.hass, self._entry_data[CONF_TOPIC], received)
-            for second in range(SCAN_DURATION):
-                await asyncio.sleep(1)
-                self.async_update_progress((second + 1) / SCAN_DURATION)
-        except HomeAssistantError:
-            self._scan_error = "mqtt_unavailable"
-        finally:
-            if unsubscribe is not None:
-                unsubscribe()
+            if payload is not None:
+                record_detection(self._scan_detections, payload, self._scan_profile, dt_util.utcnow().isoformat())
+                session.data["latest"] = payload
+                session.data["detections"] = list(self._scan_detections.values())
+                session.publish()
+
+        self._scan_unsub = await mqtt.async_subscribe(self.hass, self._entry_data[CONF_TOPIC], received)
+
+    @callback
+    def _stop_setup_scan(self) -> None:
+        if self._scan_unsub is not None:
+            self._scan_unsub()
+            self._scan_unsub = None
+        remove_session(self.hass, self.flow_id)
 
     async def async_step_scan(self, user_input=None) -> ConfigFlowResult:
-        """Show progress while collecting initial RF signals."""
-        if self._scan_task is None:
-            self._scan_task = self.hass.async_create_task(self._async_scan_mqtt())
-        if not self._scan_task.done():
-            return self.async_show_progress(
-                step_id="scan",
-                progress_action="scan_signals",
-                progress_task=self._scan_task,
-                description_placeholders={
-                    "seconds": str(SCAN_DURATION),
-                    "found": str(len(self._scan_detections)),
-                },
-            )
-        if self._scan_task.cancelled():
-            return self.async_abort(reason="scan_cancelled")
-        self._scan_task.result()
-        return self.async_show_progress_done(next_step_id="scan_error" if self._scan_error else "scan_results")
+        """Scan until the user presses Done in the live adoption panel."""
+        if user_input is not None:
+            for requested in user_input.get("devices", []):
+                device_id = requested.get("device_id")
+                detection = self._scan_detections.get(device_id)
+                if detection is None:
+                    continue
+                if any(sensor["rf_id"] == device_id for sensor in self._pending_options[CONF_SENSORS]):
+                    continue
+                self._add_pending_sensor(_learned_sensor(detection, self._scan_profile["id"], requested))
+            self._stop_setup_scan()
+            return self.async_external_step_done(next_step_id="onboarding")
+        if self._scan_unsub is None:
+            try:
+                await self._async_start_setup_scan()
+            except HomeAssistantError:
+                self._stop_setup_scan()
+                return await self.async_step_scan_error()
+        return self.async_external_step(step_id="scan", url=_live_panel_url(self.hass, self.flow_id))
 
     async def async_step_scan_error(self, user_input=None) -> ConfigFlowResult:
         """Offer recovery when MQTT was unavailable during scanning."""
         return self.async_show_menu(step_id="scan_error", menu_options=["scan_retry", "manual", "finish"])
 
-    async def async_step_scan_results(self, user_input=None) -> ConfigFlowResult:
-        """Select one transmitter from the accumulating discovery list."""
-        if not self._scan_detections:
-            return self.async_show_menu(step_id="scan_empty", menu_options=["scan_retry", "manual", "finish"])
-        if user_input is not None:
-            if user_input["device"] == SCAN_AGAIN:
-                return await self.async_step_scan_retry()
-            self._selected_detection = self._scan_detections[user_input["device"]]
-            return await self.async_step_onboarding_sensor()
-        choices = [
-            _select_option(device_id, _detection_label(detection))
-            for device_id, detection in self._scan_detections.items()
-        ]
-        choices.append(_select_option(SCAN_AGAIN, "Scan again to find more devices"))
-        return self.async_show_form(
-            step_id="scan_results",
-            data_schema=vol.Schema(
-                {vol.Required("device"): selector.SelectSelector(selector.SelectSelectorConfig(options=choices))}
-            ),
-            description_placeholders={"found": str(len(self._scan_detections))},
-        )
-
     async def async_step_scan_retry(self, user_input=None) -> ConfigFlowResult:
-        """Continue the current accumulating scan session."""
-        self._scan_task = None
-        self._scan_error = None
+        """Retry an unavailable setup scan."""
         return await self.async_step_scan()
-
-    async def async_step_onboarding_sensor(self, user_input=None) -> ConfigFlowResult:
-        """Name and create a sensor found during initial scanning."""
-        assert self._selected_detection is not None
-        detection = self._selected_detection
-        errors: dict[str, str] = {}
-        if user_input is not None:
-            if any(
-                sensor["rf_id"] == detection["device_id"] and sensor["profile_id"] == self._scan_profile["id"]
-                for sensor in self._pending_options[CONF_SENSORS]
-            ):
-                errors["base"] = "already_configured"
-            else:
-                self._add_pending_sensor(
-                    {
-                        **user_input,
-                        "rf_id": detection["device_id"],
-                        "profile_id": self._scan_profile["id"],
-                    }
-                )
-                self._selected_detection = None
-                return await self.async_step_onboarding()
-        return self.async_show_form(
-            step_id="onboarding_sensor",
-            data_schema=vol.Schema(
-                {
-                    vol.Required("name", default=f"RF sensor {detection['device_id']}"): str,
-                    vol.Required("contact_type", default="door"): TYPE_SELECTOR,
-                    vol.Required("tamper_enabled", default=True): bool,
-                    vol.Required("battery_enabled", default=True): bool,
-                }
-            ),
-            description_placeholders={
-                "raw": detection["last_raw"],
-                "device": detection["device_id"],
-                "events": ", ".join(detection["events"]),
-            },
-            errors=errors,
-        )
 
     async def async_step_manual(self, user_input=None) -> ConfigFlowResult:
         """Add a sensor manually during initial setup."""
@@ -298,6 +321,10 @@ class RF433ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                     vol.Required("name", default=values.get("name", "")): str,
                     vol.Required("rf_id", default=values.get("rf_id", "")): str,
                     vol.Required("contact_type", default=values.get("contact_type", "door")): TYPE_SELECTOR,
+                    vol.Optional(
+                        CONF_AREA_ID,
+                        description={"suggested_value": values.get(CONF_AREA_ID)},
+                    ): AREA_SELECTOR,
                     vol.Required("tamper_enabled", default=values.get("tamper_enabled", True)): bool,
                     vol.Required("battery_enabled", default=values.get("battery_enabled", True)): bool,
                 }
@@ -311,12 +338,20 @@ class RF433ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
 
     async def async_step_finish(self, user_input=None) -> ConfigFlowResult:
         """Create the fully configured bridge entry."""
+        self._stop_profile_reader()
+        self._stop_setup_scan()
         await self.async_set_unique_id(str(uuid4()))
         return self.async_create_entry(
             title=self._entry_data[CONF_NAME],
             data=self._entry_data,
             options=self._pending_options,
         )
+
+    @callback
+    def async_remove(self) -> None:
+        """Release live MQTT resources if the user closes the flow."""
+        self._stop_profile_reader()
+        self._stop_setup_scan()
 
     @staticmethod
     @callback
@@ -330,12 +365,12 @@ class RF433OptionsFlow(config_entries.OptionsFlow):
     def __init__(self) -> None:
         self.options: dict[str, Any] = {}
         self._selected: str | None = None
-        self._learn_task: asyncio.Task[None] | None = None
         self._learned: str | None = None
         self._learn_raw: str | None = None
         self._learn_event: str | None = None
         self._learn_profile: str | None = None
         self._scan_detections: dict[str, dict[str, Any]] = {}
+        self._learn_callback: Callable[[str], None] | None = None
 
     async def async_step_init(self, user_input=None):
         self.options = deepcopy({**DEFAULT_OPTIONS, **self.config_entry.options})
@@ -442,6 +477,7 @@ class RF433OptionsFlow(config_entries.OptionsFlow):
                     default=values.get("profile_id", self._learn_profile or DEFAULT_PROFILE_ID),
                 ): self._profile_selector(),
                 vol.Required("contact_type", default=values.get("contact_type", "door")): TYPE_SELECTOR,
+                vol.Optional(CONF_AREA_ID, description={"suggested_value": values.get(CONF_AREA_ID)}): AREA_SELECTOR,
                 vol.Required("tamper_enabled", default=values.get("tamper_enabled", True)): bool,
                 vol.Required("battery_enabled", default=values.get("battery_enabled", True)): bool,
             }
@@ -460,7 +496,6 @@ class RF433OptionsFlow(config_entries.OptionsFlow):
     async def async_step_learn(self, user_input=None):
         if user_input is not None:
             self._learn_profile = user_input["profile_id"]
-            self._learn_task = None
             self._scan_detections = {}
             return await self.async_step_learn_wait()
         return self.async_show_form(
@@ -468,74 +503,67 @@ class RF433OptionsFlow(config_entries.OptionsFlow):
             data_schema=vol.Schema({vol.Required("profile_id", default=DEFAULT_PROFILE_ID): self._profile_selector()}),
         )
 
-    async def _async_scan_manager(self) -> None:
-        """Accumulate every valid transmitter during one scan window."""
+    async def _async_start_learn_scan(self) -> None:
+        """Start an open-ended manager scan backed by the live panel."""
+        await async_register_live_panel(self.hass)
         manager = self.config_entry.runtime_data
         profile = self._profile(self._learn_profile or DEFAULT_PROFILE_ID)
 
+        async def done(data: dict[str, Any]) -> None:
+            await self.hass.config_entries.options.async_configure(self.flow_id, data)
+
+        session = LiveSession(
+            mode="discovery",
+            data={"title": f"Learn sensors from {self.config_entry.title}", "latest": None, "detections": []},
+            async_done=done,
+        )
+        register_session(self.hass, self.flow_id, session)
+
         @callback
         def received(payload: str) -> None:
-            record_detection(self._scan_detections, payload, profile)
+            record_detection(self._scan_detections, payload, profile, dt_util.utcnow().isoformat())
+            session.data["latest"] = payload
+            session.data["detections"] = list(self._scan_detections.values())
+            session.publish()
 
+        self._learn_callback = received
         manager.scan_callbacks.add(received)
-        try:
-            for second in range(SCAN_DURATION):
-                await asyncio.sleep(1)
-                self.async_update_progress((second + 1) / SCAN_DURATION)
-        finally:
-            manager.scan_callbacks.discard(received)
+
+    @callback
+    def _stop_learn_scan(self) -> None:
+        if self._learn_callback is not None:
+            self.config_entry.runtime_data.scan_callbacks.discard(self._learn_callback)
+            self._learn_callback = None
+        remove_session(self.hass, self.flow_id)
 
     async def async_step_learn_wait(self, user_input=None):
-        """Maintain one progress task across frontend refreshes."""
-        if self._learn_task is None:
-            self._learn_task = self.hass.async_create_task(self._async_scan_manager())
-        if not self._learn_task.done():
-            return self.async_show_progress(
-                step_id="learn_wait",
-                progress_action="scan_signals",
-                progress_task=self._learn_task,
-                description_placeholders={
-                    "bridge": self.config_entry.title,
-                    "seconds": str(SCAN_DURATION),
-                    "found": str(len(self._scan_detections)),
-                },
-            )
-        if self._learn_task.cancelled():
-            return self.async_abort(reason="scan_cancelled")
-        self._learn_task.result()
-        return self.async_show_progress_done(next_step_id="learn_results")
-
-    async def async_step_learn_results(self, user_input=None):
-        """Choose a learned device from all signals found in the scan."""
-        if not self._scan_detections:
-            return self.async_show_menu(step_id="learn_empty", menu_options=["learn_retry", "add_sensor", "init"])
+        """Scan until the user presses Done in the live adoption panel."""
         if user_input is not None:
-            if user_input["device"] == SCAN_AGAIN:
-                return await self.async_step_learn_retry()
-            selected = self._scan_detections[user_input["device"]]
-            self._learned = selected["device_id"]
-            self._learn_raw = selected["last_raw"]
-            self._learn_event = f"{', '.join(selected['event_codes'])} / {', '.join(selected['events'])}"
-            return await self._sensor_form("learn_done", None)
-        choices = [
-            _select_option(device_id, _detection_label(detection))
-            for device_id, detection in self._scan_detections.items()
-        ]
-        choices.append(_select_option(SCAN_AGAIN, "Scan again to find more devices"))
-        return self.async_show_form(
-            step_id="learn_results",
-            data_schema=vol.Schema(
-                {vol.Required("device"): selector.SelectSelector(selector.SelectSelectorConfig(options=choices))}
-            ),
-            description_placeholders={"found": str(len(self._scan_detections))},
-        )
+            for requested in user_input.get("devices", []):
+                device_id = requested.get("device_id")
+                detection = self._scan_detections.get(device_id)
+                if detection is None:
+                    continue
+                if any(
+                    sensor["rf_id"] == device_id and sensor["profile_id"] == (self._learn_profile or DEFAULT_PROFILE_ID)
+                    for sensor in self.options[CONF_SENSORS]
+                ):
+                    continue
+                item = _learned_sensor(detection, self._learn_profile or DEFAULT_PROFILE_ID, requested)
+                self.options[CONF_SENSORS].append({**item, "id": str(uuid4())})
+            self._stop_learn_scan()
+            return self.async_external_step_done(next_step_id="learn_complete")
+        if self._learn_callback is None:
+            await self._async_start_learn_scan()
+        return self.async_external_step(step_id="learn_wait", url=_live_panel_url(self.hass, self.flow_id))
+
+    async def async_step_learn_complete(self, user_input=None):
+        """Save all devices returned by the completed live adoption panel."""
+        return self.async_create_entry(data=self.options)
 
     async def async_step_learn_retry(self, user_input=None):
-        self._learn_task = None
+        self._stop_learn_scan()
         return await self.async_step_learn_wait()
-
-    async def async_step_learn_done(self, user_input=None):
-        return await self._sensor_form("learn_done", user_input)
 
     async def async_step_sensors(self, user_input=None):
         if not self.options[CONF_SENSORS]:
@@ -678,6 +706,18 @@ class RF433OptionsFlow(config_entries.OptionsFlow):
 
     async def async_step_information(self, user_input=None):
         manager = self.config_entry.runtime_data
+        history: list[str] = []
+        tamper: list[str] = []
+        for runtime in manager.sensors.values():
+            name = runtime.config["name"]
+            rf_id = runtime.config["rf_id"]
+            codes = "\n".join(
+                f"  {item['raw']} — event {item['event_code']} ({item['event']}), "
+                f"{item['count']}x, latest {item.get('last_seen') or 'during setup'}"
+                for item in runtime.code_history.values()
+            )
+            history.append(f"{name} [{rf_id}]\n{codes or '  No codes received yet'}")
+            tamper.append(f"{name}: {runtime.tamper_last_seen or 'Never'}")
         return self.async_show_form(
             step_id="information",
             data_schema=vol.Schema({}),
@@ -685,5 +725,14 @@ class RF433OptionsFlow(config_entries.OptionsFlow):
                 "sensors": str(len(manager.sensors)),
                 "unknown": str(len(manager.unknown)),
                 "received": str(manager.stats["received"]),
+                "latest": manager.last_received_payload or "None yet",
+                "latest_seen": manager.last_received_at or "Never",
+                "history": "\n\n".join(history) or "No configured sensors.",
+                "tamper": "\n".join(tamper) or "No configured sensors.",
             },
         )
+
+    @callback
+    def async_remove(self) -> None:
+        """Release the manager scan callback when the flow closes."""
+        self._stop_learn_scan()

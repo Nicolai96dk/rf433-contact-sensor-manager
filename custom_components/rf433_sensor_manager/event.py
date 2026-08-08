@@ -25,7 +25,7 @@ class Tamper(RF433Entity, EventEntity):
         self._last_seen = None
 
     def _update(self):
-        if self.runtime.config.get("last_event") == "tamper" and self.runtime.last_seen != self._last_seen:
+        if self.runtime.last_event == "tamper" and self.runtime.last_seen != self._last_seen:
             self._last_seen = self.runtime.last_seen
             self._trigger_event(
                 "tamper",

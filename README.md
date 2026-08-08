@@ -13,7 +13,7 @@ A UI-configured Home Assistant custom integration that converts raw RF433 messag
 - Built-in **DS-4 / Generic Contact Sensor** protocol (`AAAAEE`: four-character ID and two-character event)
 - Reusable custom protocol profiles and exact RF-ID matching
 - Manual, learn-mode, and recent-unknown-signal sensor creation
-- Setup-time MQTT scanning that accumulates every protocol-compatible RF device it sees
+- ZHA-style live MQTT adoption that immediately lists every protocol-compatible RF device and runs until **Done**
 - Door/window contact, latched low battery, native tamper event, last message, last seen, and battery-reset button
 - Persistent contact/battery/history state, bounded unknown history, diagnostics, and stable device/entity identifiers
 - Entirely native Home Assistant config and options flows; no YAML or custom frontend
@@ -35,7 +35,9 @@ Each entry represents one RF bridge. The setup form starts with **Tasmota Sonoff
 
 The default profile recognizes six hexadecimal characters: the first four are the exact sensor ID and the final two map `0A` open, `0E` closed, `07` tamper, and `06` low battery. These values are shown during initial setup and can be edited for another protocol. Low battery remains set until **Battery replaced** is pressed. Open/close messages never clear it.
 
-Scan/Learn mode listens for 15 seconds and builds a selectable list of all matching RF device IDs, event codes, and event types received during the scan. Select **Scan again** to keep growing the same list. Because RF transmissions are unauthenticated, confirm that a displayed code belongs to the intended sensor. Unknown history is limited to 100 distinct raw codes.
+Scan/Learn mode opens a live Home Assistant adoption view and keeps listening until **Done** is pressed. Newly discovered IDs appear immediately; each can be named and assigned to an area before it is created. Learned contact sensors start with the open/closed state of their most recent setup signal. Because RF transmissions are unauthenticated, confirm that a displayed code belongs to the intended sensor.
+
+Diagnostics retain up to 100 distinct full RF codes per configured device ID, including unmapped event suffixes such as `01`. Each record includes its event code, recognition status, first/latest reception time, and count. Unknown-signal history is also limited to 100 distinct raw codes.
 
 ## Development
 
