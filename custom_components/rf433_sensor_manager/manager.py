@@ -31,6 +31,7 @@ from .protocol import event_kind, extract_payload, parse
 
 _LOGGER = logging.getLogger(__name__)
 STORE_VERSION = 1
+MAX_CODES_PER_SENSOR = 100
 
 
 class RF433Manager:
@@ -43,7 +44,17 @@ class RF433Manager:
             DEFAULT_PROFILE_ID: DEFAULT_PROFILE,
             **{p["id"]: p for p in options[CONF_PROFILES]},
         }
-        self.sensors: dict[str, SensorRuntime] = {s["id"]: SensorRuntime(s) for s in options[CONF_SENSORS]}
+        self.sensors: dict[str, SensorRuntime] = {
+            sensor["id"]: SensorRuntime(
+                sensor,
+                contact=sensor.get("initial_contact"),
+                last_payload=sensor.get("initial_payload"),
+                last_seen=sensor.get("initial_seen"),
+                last_event=sensor.get("initial_event"),
+                code_history=dict(sensor.get("initial_code_history", {})),
+            )
+            for sensor in options[CONF_SENSORS]
+        }
         self.unknown: OrderedDict[str, dict[str, Any]] = OrderedDict()
         self.stats: dict[str, int] = {
             "received": 0,
@@ -56,6 +67,8 @@ class RF433Manager:
         self._unsub: Callable[[], None] | None = None
         self._store: Store[dict[str, Any]] = Store(hass, STORE_VERSION, f"{DOMAIN}.{entry.entry_id}")
         self.scan_callbacks: set[Callable[[str], None]] = set()
+        self.last_received_payload: str | None = None
+        self.last_received_at: str | None = None
 
     async def async_start(self) -> None:
         if not await mqtt.async_wait_for_mqtt_client(self.hass):
@@ -67,6 +80,11 @@ class RF433Manager:
                 runtime.battery_low = bool(state.get("battery_low"))
                 runtime.contact = state.get("contact")
                 runtime.last_payload, runtime.last_seen = state.get("last_payload"), state.get("last_seen")
+                runtime.last_event = state.get("last_event")
+                runtime.tamper_last_seen = state.get("tamper_last_seen")
+                runtime.code_history = dict(state.get("code_history", {}))
+        self.last_received_payload = saved.get("last_received_payload")
+        self.last_received_at = saved.get("last_received_at")
         self._unsub = await mqtt.async_subscribe(self.hass, self.entry.data[CONF_TOPIC], self._message)
 
     async def async_stop(self) -> None:
@@ -90,6 +108,8 @@ class RF433Manager:
             self.stats["malformed"] += 1
             _LOGGER.debug("Ignoring malformed RF message on %s", message.topic)
             return
+        self.last_received_payload = payload
+        self.last_received_at = dt_util.utcnow().isoformat()
         for scan_callback in tuple(self.scan_callbacks):
             scan_callback(payload)
         interval = float(self.entry.options.get(CONF_DUPLICATE_INTERVAL, 1.0))
@@ -112,13 +132,16 @@ class RF433Manager:
             if parsed and parsed[0] == runtime.config["rf_id"]:
                 kind = event_kind(parsed[1], profile)
                 runtime.last_payload, runtime.last_seen = payload, now
+                runtime.last_event = kind
+                self._record_sensor_code(runtime, payload, parsed[1], kind, now)
                 if kind == "open":
                     runtime.contact = True
                 elif kind == "closed":
                     runtime.contact = False
+                elif kind == "tamper" and runtime.config.get("tamper_enabled", True):
+                    runtime.tamper_last_seen = now
                 elif kind == "battery" and runtime.config.get("battery_enabled", True):
                     runtime.battery_low = True
-                runtime.config["last_event"] = kind
                 runtime.notify()
                 self.stats["accepted"] += 1
                 self.hass.async_create_task(self._async_save())
@@ -139,6 +162,38 @@ class RF433Manager:
             self.unknown.popitem(last=False)
         self.hass.async_create_task(self._async_save())
 
+    @staticmethod
+    def _record_sensor_code(
+        runtime: SensorRuntime,
+        payload: str,
+        event_code: str,
+        kind: str,
+        now: str,
+    ) -> None:
+        """Retain every distinct code received for a configured transmitter."""
+        item = runtime.code_history.pop(
+            payload,
+            {
+                "raw": payload,
+                "event_code": event_code,
+                "event": kind,
+                "recognized": kind != "unknown",
+                "first_seen": now,
+                "count": 0,
+            },
+        )
+        item.update(
+            {
+                "event": kind,
+                "recognized": kind != "unknown",
+                "last_seen": now,
+                "count": item["count"] + 1,
+            }
+        )
+        runtime.code_history[payload] = item
+        while len(runtime.code_history) > MAX_CODES_PER_SENSOR:
+            runtime.code_history.pop(next(iter(runtime.code_history)))
+
     async def async_reset_battery(self, sensor_id: str) -> None:
         runtime = self.sensors[sensor_id]
         runtime.battery_low = False
@@ -150,12 +205,17 @@ class RF433Manager:
         await self._store.async_save(
             {
                 "unknown": dict(self.unknown),
+                "last_received_payload": self.last_received_payload,
+                "last_received_at": self.last_received_at,
                 "states": {
                     sid: {
                         "battery_low": r.battery_low,
                         "contact": r.contact,
                         "last_payload": r.last_payload,
                         "last_seen": r.last_seen,
+                        "last_event": r.last_event,
+                        "tamper_last_seen": r.tamper_last_seen,
+                        "code_history": r.code_history,
                     }
                     for sid, r in self.sensors.items()
                 },

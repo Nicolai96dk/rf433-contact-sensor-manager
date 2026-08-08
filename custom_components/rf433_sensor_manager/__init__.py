@@ -3,13 +3,24 @@
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import ConfigEntryNotReady, HomeAssistantError
+from homeassistant.helpers import config_validation as cv
 from homeassistant.helpers import device_registry as dr
 from homeassistant.helpers import entity_registry as er
+from homeassistant.helpers.typing import ConfigType
 
 from .const import DOMAIN, PLATFORMS
 from .manager import RF433Manager
+from .panel import async_register_live_panel
 
 type RF433ConfigEntry = ConfigEntry[RF433Manager]
+
+CONFIG_SCHEMA = cv.config_entry_only_config_schema(DOMAIN)
+
+
+async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
+    """Register the hidden live setup panel."""
+    await async_register_live_panel(hass)
+    return True
 
 
 async def async_setup_entry(hass: HomeAssistant, entry: RF433ConfigEntry) -> bool:
@@ -29,7 +40,19 @@ async def async_setup_entry(hass: HomeAssistant, entry: RF433ConfigEntry) -> boo
         model="MQTT RF Bridge",
     )
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
+    _assign_sensor_areas(hass, entry, manager)
     return True
+
+
+def _assign_sensor_areas(hass: HomeAssistant, entry: ConfigEntry, manager: RF433Manager) -> None:
+    """Apply areas selected while learning sensors to their device entries."""
+    registry = dr.async_get(hass)
+    for sensor_id, runtime in manager.sensors.items():
+        if not (area_id := runtime.config.get("area_id")):
+            continue
+        device = registry.async_get_device(identifiers={(DOMAIN, f"{entry.entry_id}:{sensor_id}")})
+        if device is not None and device.area_id != area_id:
+            registry.async_update_device(device.id, area_id=area_id)
 
 
 def _remove_stale_registry_items(hass: HomeAssistant, entry: ConfigEntry, sensor_ids: set[str]) -> None:
@@ -74,5 +97,6 @@ async def async_migrate_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             profiles.insert(0, deepcopy(DEFAULT_PROFILE))
         options[CONF_PROFILES] = profiles
         hass.config_entries.async_update_entry(entry, options=options, version=2)
-        return True
-    return entry.version == 2
+    if entry.version == 2:
+        hass.config_entries.async_update_entry(entry, version=3)
+    return entry.version == 3
