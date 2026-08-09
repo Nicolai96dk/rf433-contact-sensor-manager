@@ -20,7 +20,7 @@ def test_manifest_domain_and_custom_translation_layout() -> None:
 
     assert manifest["domain"] == INTEGRATION_DIR.name == "rf433_contact_sensor_manager"
     assert manifest["name"] == translations["title"] == "RF433 Contact Sensor Manager"
-    assert manifest["version"] == "0.5.0"
+    assert manifest["version"] == "0.5.1"
     assert not (INTEGRATION_DIR / "strings.json").exists()
 
 

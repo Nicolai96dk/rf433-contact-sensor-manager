@@ -54,9 +54,51 @@ The RF bridge, Tasmota, MQTT broker, and Home Assistant MQTT integration must al
 
 For manual installation, copy `custom_components/rf433_contact_sensor_manager` into `custom_components` in your Home Assistant configuration directory, then restart Home Assistant.
 
-### Upgrading from the old domain
+## Quick setup
 
-Version 0.5.0 changes the integration domain from `rf433_sensor_manager` to `rf433_contact_sensor_manager`. Because the old name was not in public use, no automatic migration is included. Remove the old test integration and its `custom_components/rf433_sensor_manager` directory before installing 0.5.0, then configure the integration again.
+The guided setup takes you from an MQTT bridge to a working contact sensor in a few short screens. The common Tasmota values and the built-in contact-sensor protocol are already filled in.
+
+**Set up 20+ contact sensors in five minutes or less.** With the sensors ready to trigger, continuous learning lets you identify, name, save, and move directly to the next sensor without leaving the setup dialog.
+
+### 1. Add the RF bridge
+
+Confirm the prefilled bridge name, MQTT topic, and payload settings. If your Tasmota bridge uses the defaults, you can continue without changing anything.
+
+<p align="center">
+  <img src="https://raw.githubusercontent.com/Nicolai96dk/rf433-contact-sensor-manager/main/docs/images/setup/01-add-rf-bridge.png" alt="Add an RF bridge using the prefilled Tasmota MQTT settings" width="520">
+</p>
+
+### 2. Confirm the protocol
+
+The default contact-sensor profile is ready to use. Live scanning is active on this screen, so you can trigger a sensor and immediately confirm how its RF code is interpreted.
+
+<p align="center">
+  <img src="https://raw.githubusercontent.com/Nicolai96dk/rf433-contact-sensor-manager/main/docs/images/setup/02-configure-protocol.png" alt="Confirm the default contact-sensor protocol while live RF scanning is active" width="520">
+</p>
+
+### 3. Choose how to add sensors
+
+Learn a sensor from live MQTT traffic, enter a known RF device ID manually, or finish setup and add sensors later.
+
+<p align="center">
+  <img src="https://raw.githubusercontent.com/Nicolai96dk/rf433-contact-sensor-manager/main/docs/images/setup/03-add-sensors.png" alt="Choose live learning, manual sensor creation, or finish setup" width="520">
+</p>
+
+### 4. Trigger and name the sensor
+
+Open or close the contact sensor. Its latest RF code appears automatically; enter a name, confirm the contact type, and save. Select **Add another sensor** to continue or **Done** to finish.
+
+<p align="center">
+  <img src="https://raw.githubusercontent.com/Nicolai96dk/rf433-contact-sensor-manager/main/docs/images/setup/04-learning-mode.png" alt="Name and save a contact sensor identified through live learning mode" width="520">
+</p>
+
+### 5. Make changes at any time
+
+Initial setup does not lock anything in. Open **Configure** later to change the RF bridge, learn or add sensors, edit existing sensors and protocol profiles, inspect unknown signals, or view diagnostics.
+
+<p align="center">
+  <img src="https://raw.githubusercontent.com/Nicolai96dk/rf433-contact-sensor-manager/main/docs/images/setup/05-manage-integration.png" alt="Manage bridge settings, sensors, protocol profiles, unknown signals, and diagnostics after setup" width="520">
+</p>
 
 ## Configuration
 
@@ -92,7 +134,6 @@ The hub's latest RF signal includes every valid RF code received on the configur
 - Check the exact topic, payload format, and JSON path when the live preview remains empty.
 - Trigger the sensor physically; most battery-powered contact sensors do not transmit continuously.
 - If a code appears but is not interpreted correctly, compare its length, device-ID position, event position, and event suffix with the protocol profile.
-- If HACS still contains the pre-0.5.0 test version, remove the old domain directory and restart Home Assistant before reinstalling.
 
 ## Security and limitations
 
