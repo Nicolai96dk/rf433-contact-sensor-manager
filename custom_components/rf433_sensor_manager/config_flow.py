@@ -96,7 +96,7 @@ def _protocol_profile_schema(values: dict[str, Any]) -> vol.Schema:
                         vol.Required("event_length", default=values.get("event_length", 2)): vol.Coerce(int),
                     }
                 ),
-                {"collapsed": False},
+                {"collapsed": True},
             ),
             vol.Required("codes"): data_entry_flow.section(
                 vol.Schema(
@@ -107,7 +107,7 @@ def _protocol_profile_schema(values: dict[str, Any]) -> vol.Schema:
                         vol.Optional("battery_code", default=values.get("battery_code") or ""): str,
                     }
                 ),
-                {"collapsed": False},
+                {"collapsed": True},
             ),
         }
     )
@@ -120,7 +120,7 @@ def _learned_sensor(detection: dict[str, Any], profile_id: str, user_input: dict
         "name": name,
         "rf_id": detection["device_id"],
         "profile_id": profile_id,
-        "contact_type": user_input.get("contact_type", "door"),
+        "contact_type": user_input.get("contact_type", "window"),
         "tamper_enabled": True,
         "battery_enabled": True,
         "initial_payload": detection["last_raw"],
@@ -145,7 +145,7 @@ def _learning_schema(values: dict[str, Any]) -> vol.Schema:
     return vol.Schema(
         {
             vol.Optional("name", default=values.get("name", "")): str,
-            vol.Required("contact_type", default=values.get("contact_type", "door")): TYPE_SELECTOR,
+            vol.Required("contact_type", default=values.get("contact_type", "window")): TYPE_SELECTOR,
             vol.Required(
                 "next_action", default=values.get("next_action", LEARNING_ACTION_ADD)
             ): LEARNING_ACTION_SELECTOR,

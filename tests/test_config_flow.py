@@ -85,6 +85,8 @@ async def test_user_flow_loads_with_tasmota_defaults(hass, hass_ws_client, monke
     assert [field["name"] for field in serialized] == ["name", "payload", "codes"]
     assert serialized[1]["type"] == "expandable"
     assert serialized[2]["type"] == "expandable"
+    assert serialized[1]["expanded"] is False
+    assert serialized[2]["expanded"] is False
     assert "default" not in serialized[1]
     assert "default" not in serialized[2]
     assert {field["name"]: field.get("default") for field in serialized[1]["schema"]} == {
@@ -170,6 +172,7 @@ async def test_setup_scan_is_live_until_done_and_seeds_sensor(hass, hass_ws_clie
     assert result["type"] is FlowResultType.FORM
     assert result["step_id"] == "scan"
     assert result["preview"] == DOMAIN
+    assert result["data_schema"]({})["contact_type"] == "window"
     client = await hass_ws_client(hass)
     await client.send_json_auto_id(
         {
@@ -301,6 +304,7 @@ async def test_options_learning_pushes_devices_until_done(hass) -> None:
     assert result["type"] is FlowResultType.FORM
     assert result["step_id"] == "learn_wait"
     assert result["preview"] == DOMAIN
+    assert result["data_schema"]({})["contact_type"] == "window"
     callback = next(iter(manager.scan_callbacks))
     callback("6F620E")
     session = hass.data[DOMAIN]["preview_sessions"][result["flow_id"]]
@@ -407,6 +411,8 @@ async def test_options_profile_uses_sections_defaults_and_live_preview(hass) -> 
     assert result["preview"] == DOMAIN
     serialized = convert(result["data_schema"], custom_serializer=cv.custom_serializer)
     assert [field["name"] for field in serialized] == ["name", "payload", "codes"]
+    assert serialized[1]["expanded"] is False
+    assert serialized[2]["expanded"] is False
     assert serialized[1]["schema"][0]["default"] == 6
     assert serialized[2]["schema"][0]["default"] == "0A"
     session = hass.data[DOMAIN]["preview_sessions"][result["flow_id"]]
