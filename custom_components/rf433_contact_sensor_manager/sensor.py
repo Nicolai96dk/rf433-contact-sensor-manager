@@ -122,7 +122,7 @@ class UnknownRFSignals(RF433HubEntity, SensorEntity):
 
 
 class LastMessage(RF433Entity, SensorEntity):
-    _attr_name = "Last RF message"
+    _attr_translation_key = "last_message"
     _attr_entity_category = EntityCategory.DIAGNOSTIC
 
     def __init__(self, manager, runtime):
@@ -138,7 +138,7 @@ class LastMessage(RF433Entity, SensorEntity):
 
 
 class LastSeen(RF433Entity, SensorEntity):
-    _attr_name = "Last seen"
+    _attr_translation_key = "last_seen"
     _attr_entity_category = EntityCategory.DIAGNOSTIC
     _attr_device_class = SensorDeviceClass.TIMESTAMP
 
@@ -153,7 +153,7 @@ class LastSeen(RF433Entity, SensorEntity):
 class LastTamper(RF433Entity, SensorEntity):
     """Expose an explicit Never state until the first tamper event."""
 
-    _attr_name = "Last tamper"
+    _attr_translation_key = "last_tamper"
     _attr_entity_category = EntityCategory.DIAGNOSTIC
 
     def __init__(self, manager, runtime):

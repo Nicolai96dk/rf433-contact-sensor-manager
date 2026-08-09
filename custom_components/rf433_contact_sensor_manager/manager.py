@@ -83,6 +83,7 @@ class RF433Manager:
                 runtime.last_payload, runtime.last_seen = state.get("last_payload"), state.get("last_seen")
                 runtime.last_event = state.get("last_event")
                 runtime.tamper_last_seen = state.get("tamper_last_seen")
+                runtime.manual_closed_at = state.get("manual_closed_at")
                 runtime.code_history = dict(state.get("code_history", {}))
         self.last_received_payload = saved.get("last_received_payload")
         self.last_received_at = saved.get("last_received_at")
@@ -211,6 +212,26 @@ class RF433Manager:
         runtime.notify()
         await self._async_save()
 
+    async def async_mark_closed(self, sensor_id: str) -> None:
+        """Override one contact to closed without altering its RF history."""
+        runtime = self.sensors[sensor_id]
+        self._apply_closed_override(runtime, dt_util.utcnow().isoformat())
+        await self._async_save()
+
+    async def async_mark_all_closed(self) -> None:
+        """Override every configured contact to closed and persist once."""
+        closed_at = dt_util.utcnow().isoformat()
+        for runtime in self.sensors.values():
+            self._apply_closed_override(runtime, closed_at)
+        await self._async_save()
+
+    @staticmethod
+    def _apply_closed_override(runtime: SensorRuntime, closed_at: str) -> None:
+        """Apply the common in-memory manual close operation."""
+        runtime.contact = False
+        runtime.manual_closed_at = closed_at
+        runtime.notify()
+
     async def _async_save(self) -> None:
         await self._store.async_save(
             {
@@ -225,6 +246,7 @@ class RF433Manager:
                         "last_seen": r.last_seen,
                         "last_event": r.last_event,
                         "tamper_last_seen": r.tamper_last_seen,
+                        "manual_closed_at": r.manual_closed_at,
                         "code_history": r.code_history,
                     }
                     for sid, r in self.sensors.items()

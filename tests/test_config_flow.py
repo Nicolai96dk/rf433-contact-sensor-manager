@@ -12,7 +12,7 @@ from homeassistant.helpers import config_validation as cv
 from pytest_homeassistant_custom_component.common import MockConfigEntry
 from voluptuous_serialize import convert
 
-from custom_components.rf433_sensor_manager.const import (
+from custom_components.rf433_contact_sensor_manager.const import (
     CONF_DUPLICATE_INTERVAL,
     CONF_JSON_PATH,
     CONF_NAME,
@@ -26,7 +26,7 @@ from custom_components.rf433_sensor_manager.const import (
     DOMAIN,
     FORMAT_JSON,
 )
-from custom_components.rf433_sensor_manager.preview import render_learning_preview, render_profile_preview
+from custom_components.rf433_contact_sensor_manager.preview import render_learning_preview, render_profile_preview
 
 
 def default_protocol_input() -> dict:
@@ -147,6 +147,17 @@ async def test_user_flow_loads_with_tasmota_defaults(hass, hass_ws_client, monke
     assert result["step_id"] == "onboarding"
     assert result["menu_options"] == ["scan", "manual", "finish"]
     assert result.get("description_placeholders") is None
+    result = await hass.config_entries.flow.async_configure(result["flow_id"], {"next_step_id": "manual"})
+    assert result["data_schema"]({})["contact_type"] == "window"
+    result = await hass.config_entries.flow.async_configure(
+        result["flow_id"],
+        {"name": "Office window", "rf_id": "6f62", "contact_type": "window"},
+    )
+    assert result["step_id"] == "onboarding_configured"
+    result = await hass.config_entries.flow.async_configure(result["flow_id"], {"next_step_id": "finish"})
+    assert result["type"] is FlowResultType.CREATE_ENTRY
+    assert result["options"]["sensors"][0]["rf_id"] == "6F62"
+    assert result["options"]["sensors"][0]["contact_type"] == "window"
 
 
 @pytest.mark.usefixtures("enable_custom_integrations")
@@ -207,6 +218,11 @@ async def test_setup_scan_is_live_until_done_and_seeds_sensor(hass, hass_ws_clie
     assert serialized[-1]["selector"]["select"]["mode"] == "list"
     assert session.data["latest"] is None
     assert session.data["current_device_id"] is None
+    assert session.data["already_configured"] is False
+    assert (await client.receive_json())["event"]["state"] == "Waiting for an RF signal…"
+    scan_callback(SimpleNamespace(payload=json.dumps({"RfReceived": {"Data": "6F620E"}}), topic=DEFAULT_MQTT_TOPIC))
+    assert (await client.receive_json())["event"]["state"] == "Already identified 6F620E"
+    assert session.data["already_configured"] is True
     result = await hass.config_entries.flow.async_configure(
         result["flow_id"],
         {"name": "", "contact_type": "door", "next_action": "done"},
@@ -261,7 +277,7 @@ async def test_bridge_options_schema_is_serializable(hass) -> None:
             CONF_JSON_PATH: DEFAULT_JSON_PATH,
         },
         options=deepcopy(DEFAULT_OPTIONS),
-        version=3,
+        version=1,
     )
     entry.add_to_hass(hass)
     result = await hass.config_entries.options.async_init(entry.entry_id)
@@ -293,7 +309,7 @@ async def test_options_learning_pushes_devices_until_done(hass) -> None:
             CONF_JSON_PATH: DEFAULT_JSON_PATH,
         },
         options=deepcopy(DEFAULT_OPTIONS),
-        version=3,
+        version=1,
     )
     entry.runtime_data = manager
     entry.add_to_hass(hass)
@@ -308,7 +324,11 @@ async def test_options_learning_pushes_devices_until_done(hass) -> None:
     callback = next(iter(manager.scan_callbacks))
     callback("6F620E")
     session = hass.data[DOMAIN]["preview_sessions"][result["flow_id"]]
-    assert session.data == {"latest": "6F620E", "current_device_id": "6F62"}
+    assert session.data == {
+        "latest": "6F620E",
+        "current_device_id": "6F62",
+        "already_configured": False,
+    }
     assert render_learning_preview(session.data, {})["state"] == "Identified 6F620E"
 
     result = await hass.config_entries.options.async_configure(
@@ -346,7 +366,7 @@ async def test_options_manual_and_sensor_edit_match_guided_setup(hass) -> None:
             CONF_JSON_PATH: DEFAULT_JSON_PATH,
         },
         options={**deepcopy(DEFAULT_OPTIONS), "sensors": [sensor]},
-        version=3,
+        version=1,
     )
     entry.runtime_data = manager
     entry.add_to_hass(hass)
@@ -363,12 +383,24 @@ async def test_options_manual_and_sensor_edit_match_guided_setup(hass) -> None:
     ]
     manual = await hass.config_entries.options.async_configure(result["flow_id"], {"next_step_id": "add_sensor"})
     assert manual.get("preview") is None
+    assert manual["data_schema"]({})["contact_type"] == "window"
     assert [field["name"] for field in convert(manual["data_schema"], custom_serializer=cv.custom_serializer)] == [
         "name",
         "rf_id",
         "contact_type",
         "profile_id",
     ]
+    manual = await hass.config_entries.options.async_configure(
+        manual["flow_id"],
+        {
+            "name": "Kitchen window",
+            "rf_id": "ABCD",
+            "contact_type": "window",
+            "profile_id": DEFAULT_PROFILE["id"],
+        },
+    )
+    assert manual["type"] is FlowResultType.CREATE_ENTRY
+    assert manual["data"]["sensors"][-1]["contact_type"] == "window"
 
     result = await hass.config_entries.options.async_init(entry.entry_id)
     result = await hass.config_entries.options.async_configure(result["flow_id"], {"next_step_id": "sensors"})
@@ -381,6 +413,56 @@ async def test_options_manual_and_sensor_edit_match_guided_setup(hass) -> None:
         "contact_type",
         "profile_id",
     ]
+    result = await hass.config_entries.options.async_configure(
+        result["flow_id"],
+        {
+            "name": "Hall window",
+            "rf_id": "6F62",
+            "contact_type": "window",
+            "profile_id": DEFAULT_PROFILE["id"],
+        },
+    )
+    assert result["type"] is FlowResultType.CREATE_ENTRY
+    assert next(item for item in result["data"]["sensors"] if item["id"] == "sensor-1")["name"] == "Hall window"
+
+
+@pytest.mark.usefixtures("enable_custom_integrations")
+async def test_options_learning_marks_existing_device_immediately(hass) -> None:
+    """A learned signal is labelled immediately when its ID/profile already exists."""
+    sensor = {
+        "id": "sensor-1",
+        "name": "Office window",
+        "rf_id": "6F62",
+        "profile_id": DEFAULT_PROFILE["id"],
+        "contact_type": "window",
+        "tamper_enabled": True,
+        "battery_enabled": True,
+    }
+    manager = SimpleNamespace(scan_callbacks=set())
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        title=DEFAULT_BRIDGE_NAME,
+        data={
+            CONF_NAME: DEFAULT_BRIDGE_NAME,
+            CONF_TOPIC: DEFAULT_MQTT_TOPIC,
+            CONF_PAYLOAD_FORMAT: FORMAT_JSON,
+            CONF_JSON_PATH: DEFAULT_JSON_PATH,
+        },
+        options={**deepcopy(DEFAULT_OPTIONS), "sensors": [sensor]},
+        version=1,
+    )
+    entry.runtime_data = manager
+    entry.add_to_hass(hass)
+
+    result = await hass.config_entries.options.async_init(entry.entry_id)
+    result = await hass.config_entries.options.async_configure(result["flow_id"], {"next_step_id": "learn"})
+    result = await hass.config_entries.options.async_configure(result["flow_id"], result["data_schema"]({}))
+    callback = next(iter(manager.scan_callbacks))
+    callback("6F620E")
+
+    session = hass.data[DOMAIN]["preview_sessions"][result["flow_id"]]
+    assert session.data["already_configured"] is True
+    assert render_learning_preview(session.data, {})["state"] == "Already identified 6F620E"
 
 
 @pytest.mark.usefixtures("enable_custom_integrations")
@@ -397,7 +479,7 @@ async def test_options_profile_uses_sections_defaults_and_live_preview(hass) -> 
             CONF_JSON_PATH: DEFAULT_JSON_PATH,
         },
         options=deepcopy(DEFAULT_OPTIONS),
-        version=3,
+        version=1,
     )
     entry.runtime_data = manager
     entry.add_to_hass(hass)

@@ -1,4 +1,4 @@
-"""RF433 Sensor Manager integration."""
+"""RF433 Contact Sensor Manager integration."""
 
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
@@ -28,23 +28,11 @@ async def async_setup_entry(hass: HomeAssistant, entry: RF433ConfigEntry) -> boo
         config_entry_id=entry.entry_id,
         identifiers={(DOMAIN, entry.entry_id)},
         name=entry.title,
-        manufacturer="RF433 Sensor Manager",
+        manufacturer="RF433 Contact Sensor Manager",
         model="MQTT RF Bridge",
     )
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
-    _assign_sensor_areas(hass, entry, manager)
     return True
-
-
-def _assign_sensor_areas(hass: HomeAssistant, entry: ConfigEntry, manager: RF433Manager) -> None:
-    """Apply areas selected while learning sensors to their device entries."""
-    registry = dr.async_get(hass)
-    for sensor_id, runtime in manager.sensors.items():
-        if not (area_id := runtime.config.get("area_id")):
-            continue
-        device = registry.async_get_device(identifiers={(DOMAIN, f"{entry.entry_id}:{sensor_id}")})
-        if device is not None and device.area_id != area_id:
-            registry.async_update_device(device.id, area_id=area_id)
 
 
 def _remove_stale_registry_items(hass: HomeAssistant, entry: ConfigEntry, sensor_ids: set[str]) -> None:
@@ -75,21 +63,3 @@ async def async_unload_entry(hass: HomeAssistant, entry: RF433ConfigEntry) -> bo
 
 async def _async_reload(hass: HomeAssistant, entry: ConfigEntry) -> None:
     await hass.config_entries.async_reload(entry.entry_id)
-
-
-async def async_migrate_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
-    """Migrate old entries."""
-    if entry.version == 1:
-        from copy import deepcopy
-
-        from .const import CONF_PROFILES, DEFAULT_PROFILE, DEFAULT_PROFILE_ID
-
-        options = dict(entry.options)
-        profiles = list(options.get(CONF_PROFILES, []))
-        if not any(profile["id"] == DEFAULT_PROFILE_ID for profile in profiles):
-            profiles.insert(0, deepcopy(DEFAULT_PROFILE))
-        options[CONF_PROFILES] = profiles
-        hass.config_entries.async_update_entry(entry, options=options, version=2)
-    if entry.version == 2:
-        hass.config_entries.async_update_entry(entry, version=3)
-    return entry.version == 3

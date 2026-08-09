@@ -1,0 +1,13 @@
+{
+  "domain": "rf433_contact_sensor_manager",
+  "name": "RF433 Contact Sensor Manager",
+  "codeowners": ["@Nicolai96dk"],
+  "config_flow": true,
+  "dependencies": ["mqtt"],
+  "documentation": "https://github.com/Nicolai96dk/rf433-contact-sensor-manager",
+  "integration_type": "hub",
+  "iot_class": "local_push",
+  "issue_tracker": "https://github.com/Nicolai96dk/rf433-contact-sensor-manager/issues",
+  "requirements": [],
+  "version": "0.5.0"
+}

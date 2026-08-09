@@ -26,6 +26,7 @@ async def async_get_config_entry_diagnostics(hass, entry):
                         "battery_low": r.battery_low,
                         "contact": r.contact,
                         "tamper_last_seen": r.tamper_last_seen or "never",
+                        "manual_closed_at": r.manual_closed_at,
                         "code_history": list(r.code_history.values()),
                     }
                     for sid, r in manager.sensors.items()
