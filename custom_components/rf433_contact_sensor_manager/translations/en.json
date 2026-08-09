@@ -1,5 +1,5 @@
 {
-  "title": "RF433 Sensor Manager",
+  "title": "RF433 Contact Sensor Manager",
   "config": {
     "flow_title": "{name}",
     "step": {
@@ -148,7 +148,7 @@
   "options": {
     "step": {
       "init": {
-        "title": "Manage RF433 Sensor Manager",
+        "title": "Manage RF433 Contact Sensor Manager",
         "menu_options": {
           "bridge": "RF bridge settings",
           "add_sensor": "Add sensor manually",
@@ -442,6 +442,12 @@
     "button": {
       "battery_replaced": {
         "name": "Battery replaced"
+      },
+      "mark_as_closed": {
+        "name": "Mark as closed"
+      },
+      "mark_all_sensors_as_closed": {
+        "name": "Mark all sensors as closed"
       }
     }
   }

@@ -4,7 +4,7 @@ from pathlib import Path
 
 import pytest
 
-ROOT = Path(__file__).parents[1] / "custom_components" / "rf433_sensor_manager"
+ROOT = Path(__file__).parents[1] / "custom_components" / "rf433_contact_sensor_manager"
 
 
 def load_module(name: str):

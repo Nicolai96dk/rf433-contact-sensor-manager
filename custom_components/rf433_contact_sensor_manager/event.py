@@ -17,7 +17,7 @@ async def async_setup_entry(hass, entry, async_add_entities):
 
 
 class Tamper(RF433Entity, EventEntity):
-    _attr_name = "Tamper"
+    _attr_translation_key = "tamper"
     _attr_event_types = ["tamper"]  # noqa: RUF012
 
     def __init__(self, manager, runtime):

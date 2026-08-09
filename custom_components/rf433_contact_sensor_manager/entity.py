@@ -1,4 +1,4 @@
-"""Shared RF433 entity base."""
+"""Shared RF433 Contact Sensor Manager entity bases."""
 
 from homeassistant.helpers.device_registry import DeviceInfo
 from homeassistant.helpers.entity import Entity
@@ -37,7 +37,7 @@ class RF433HubEntity(Entity):
         self._attr_device_info = DeviceInfo(
             identifiers={(DOMAIN, manager.entry.entry_id)},
             name=manager.entry.title,
-            manufacturer="RF433 Sensor Manager",
+            manufacturer="RF433 Contact Sensor Manager",
             model="MQTT RF Bridge",
         )
 

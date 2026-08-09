@@ -106,8 +106,9 @@ def render_learning_preview(data: dict[str, Any], _user_input: dict[str, Any]) -
         return _preview_entity("Waiting for an RF signal…", "Scanning for RF sensors")
 
     current_id = data.get("current_device_id")
+    state = f"Already identified {raw}" if data.get("already_configured") else f"Identified {raw}"
     return _preview_entity(
-        f"Identified {raw}",
+        state,
         f"Scanning · Device {current_id}" if current_id else "Scanning for RF sensors",
     )
 

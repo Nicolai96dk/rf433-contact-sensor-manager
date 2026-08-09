@@ -153,10 +153,60 @@ def _learning_schema(values: dict[str, Any]) -> vol.Schema:
     )
 
 
+def _bridge_schema(values: dict[str, Any]) -> vol.Schema:
+    """Build the shared bridge form used during and after setup."""
+    return vol.Schema(
+        {
+            vol.Required(CONF_NAME, default=values.get(CONF_NAME, DEFAULT_BRIDGE_NAME)): str,
+            vol.Required(CONF_TOPIC, default=values.get(CONF_TOPIC, DEFAULT_MQTT_TOPIC)): str,
+            vol.Required(CONF_PAYLOAD_FORMAT, default=values.get(CONF_PAYLOAD_FORMAT, FORMAT_JSON)): FORMAT_SELECTOR,
+            vol.Optional(CONF_JSON_PATH, default=values.get(CONF_JSON_PATH, DEFAULT_JSON_PATH)): str,
+            vol.Required(
+                CONF_DUPLICATE_INTERVAL,
+                default=values.get(CONF_DUPLICATE_INTERVAL, DEFAULT_OPTIONS[CONF_DUPLICATE_INTERVAL]),
+            ): vol.All(vol.Coerce(float), vol.Range(min=0, max=60)),
+        }
+    )
+
+
+def _sensor_schema(
+    values: dict[str, Any],
+    *,
+    learned_id: str = "",
+    profile_selector: selector.SelectSelector | None = None,
+    default_profile_id: str = DEFAULT_PROFILE_ID,
+) -> vol.Schema:
+    """Build the shared manual/edit sensor form with a window default."""
+    fields: dict[Any, Any] = {
+        vol.Required("name", default=values.get("name", "")): str,
+        vol.Required("rf_id", default=values.get("rf_id", learned_id)): str,
+        vol.Required("contact_type", default=values.get("contact_type", "window")): TYPE_SELECTOR,
+    }
+    if profile_selector is not None:
+        fields[vol.Required("profile_id", default=values.get("profile_id", default_profile_id))] = profile_selector
+    return vol.Schema(fields)
+
+
+def _sensor_is_configured(
+    sensors: list[dict[str, Any]],
+    rf_id: str,
+    *,
+    profile_id: str | None = None,
+    exclude_id: str | None = None,
+) -> bool:
+    """Return whether an RF ID/profile pair already belongs to another sensor."""
+    return any(
+        sensor["rf_id"] == rf_id
+        and (profile_id is None or sensor["profile_id"] == profile_id)
+        and sensor.get("id") != exclude_id
+        for sensor in sensors
+    )
+
+
 class RF433ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
     """Set up one MQTT RF bridge and its first protocol profile."""
 
-    VERSION = 3
+    VERSION = 1
 
     def __init__(self) -> None:
         self._entry_data: dict[str, Any] = {}
@@ -192,19 +242,7 @@ class RF433ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                     self._entry_data.setdefault(CONF_JSON_PATH, DEFAULT_JSON_PATH)
                     self._pending_options[CONF_DUPLICATE_INTERVAL] = duplicate_interval
                     return await self.async_step_protocol()
-        schema = vol.Schema(
-            {
-                vol.Required(CONF_NAME, default=DEFAULT_BRIDGE_NAME): str,
-                vol.Required(CONF_TOPIC, default=DEFAULT_MQTT_TOPIC): str,
-                vol.Required(CONF_PAYLOAD_FORMAT, default=FORMAT_JSON): FORMAT_SELECTOR,
-                vol.Optional(CONF_JSON_PATH, default=DEFAULT_JSON_PATH): str,
-                vol.Required(
-                    CONF_DUPLICATE_INTERVAL,
-                    default=DEFAULT_OPTIONS[CONF_DUPLICATE_INTERVAL],
-                ): vol.All(vol.Coerce(float), vol.Range(min=0, max=60)),
-            }
-        )
-        return self.async_show_form(step_id="user", data_schema=schema, errors=errors)
+        return self.async_show_form(step_id="user", data_schema=_bridge_schema(user_input or {}), errors=errors)
 
     async def async_step_protocol(self, user_input=None) -> ConfigFlowResult:
         """Configure the initial profile with an in-dialog live RF preview."""
@@ -282,7 +320,7 @@ class RF433ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         self._scan_current_id = None
 
         session = PreviewSession(
-            data={"latest": None, "current_device_id": None},
+            data={"latest": None, "current_device_id": None, "already_configured": False},
             renderer=render_learning_preview,
         )
         self._scan_session = session
@@ -314,6 +352,9 @@ class RF433ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                     self._scan_current_id = device_id
                     session.data["latest"] = payload
                     session.data["current_device_id"] = self._scan_current_id
+                    session.data["already_configured"] = _sensor_is_configured(
+                        self._pending_options[CONF_SENSORS], device_id
+                    )
                     session.publish()
 
         self._scan_unsub = await mqtt.async_subscribe(self.hass, self._entry_data[CONF_TOPIC], received)
@@ -334,6 +375,7 @@ class RF433ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         if self._scan_session is not None:
             self._scan_session.data["latest"] = None
             self._scan_session.data["current_device_id"] = None
+            self._scan_session.data["already_configured"] = False
             self._scan_session.publish()
 
     async def async_step_scan(self, user_input=None) -> ConfigFlowResult:
@@ -347,7 +389,7 @@ class RF433ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                 return await self.async_step_onboarding()
             if detection is None:
                 errors["base"] = "no_signal"
-            elif any(sensor["rf_id"] == detection["device_id"] for sensor in self._pending_options[CONF_SENSORS]):
+            elif _sensor_is_configured(self._pending_options[CONF_SENSORS], detection["device_id"]):
                 if next_action == LEARNING_ACTION_DONE:
                     self._stop_setup_scan()
                     return await self.async_step_onboarding()
@@ -390,7 +432,7 @@ class RF433ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                 errors["rf_id"] = "invalid_hex"
             elif len(rf_id) != self._scan_profile["device_length"]:
                 errors["rf_id"] = "invalid_rf_id_length"
-            elif any(sensor["rf_id"] == rf_id for sensor in self._pending_options[CONF_SENSORS]):
+            elif _sensor_is_configured(self._pending_options[CONF_SENSORS], rf_id):
                 errors["rf_id"] = "already_configured"
             else:
                 self._add_pending_sensor(
@@ -406,13 +448,7 @@ class RF433ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         values = user_input or {}
         return self.async_show_form(
             step_id="manual",
-            data_schema=vol.Schema(
-                {
-                    vol.Required("name", default=values.get("name", "")): str,
-                    vol.Required("rf_id", default=values.get("rf_id", "")): str,
-                    vol.Required("contact_type", default=values.get("contact_type", "door")): TYPE_SELECTOR,
-                }
-            ),
+            data_schema=_sensor_schema(values),
             errors=errors,
         )
 
@@ -457,7 +493,6 @@ class RF433OptionsFlow(config_entries.OptionsFlow):
         self._scan_current_id: str | None = None
         self._learn_session: PreviewSession | None = None
         self._learn_callback: Callable[[str], None] | None = None
-        self._profile_session: PreviewSession | None = None
         self._profile_callback: Callable[[str], None] | None = None
 
     @staticmethod
@@ -505,18 +540,7 @@ class RF433OptionsFlow(config_entries.OptionsFlow):
         }
         return self.async_show_form(
             step_id="bridge",
-            data_schema=vol.Schema(
-                {
-                    vol.Required(CONF_NAME, default=values.get(CONF_NAME, self.config_entry.title)): str,
-                    vol.Required(CONF_TOPIC, default=values[CONF_TOPIC]): str,
-                    vol.Required(CONF_PAYLOAD_FORMAT, default=values[CONF_PAYLOAD_FORMAT]): FORMAT_SELECTOR,
-                    vol.Optional(CONF_JSON_PATH, default=values.get(CONF_JSON_PATH, DEFAULT_JSON_PATH)): str,
-                    vol.Required(
-                        CONF_DUPLICATE_INTERVAL,
-                        default=values[CONF_DUPLICATE_INTERVAL],
-                    ): vol.All(vol.Coerce(float), vol.Range(min=0, max=60)),
-                }
-            ),
+            data_schema=_bridge_schema(values),
             errors=errors,
         )
 
@@ -547,11 +571,11 @@ class RF433OptionsFlow(config_entries.OptionsFlow):
                 errors["rf_id"] = "invalid_hex"
             elif len(rf_id) != profile["device_length"]:
                 errors["rf_id"] = "invalid_rf_id_length"
-            elif any(
-                sensor["rf_id"] == rf_id
-                and sensor["profile_id"] == user_input["profile_id"]
-                and sensor.get("id") != (initial or {}).get("id")
-                for sensor in self.options[CONF_SENSORS]
+            elif _sensor_is_configured(
+                self.options[CONF_SENSORS],
+                rf_id,
+                profile_id=user_input["profile_id"],
+                exclude_id=(initial or {}).get("id"),
             ):
                 errors["rf_id"] = "already_configured"
             else:
@@ -571,16 +595,11 @@ class RF433OptionsFlow(config_entries.OptionsFlow):
                     self.options[CONF_SENSORS].append(item)
                 return self.async_create_entry(data=self.options)
         values = user_input or initial or {}
-        schema = vol.Schema(
-            {
-                vol.Required("name", default=values.get("name", "")): str,
-                vol.Required("rf_id", default=values.get("rf_id", self._learned or "")): str,
-                vol.Required("contact_type", default=values.get("contact_type", "door")): TYPE_SELECTOR,
-                vol.Required(
-                    "profile_id",
-                    default=values.get("profile_id", self._learn_profile or DEFAULT_PROFILE_ID),
-                ): self._profile_selector(),
-            }
+        schema = _sensor_schema(
+            values,
+            learned_id=self._learned or "",
+            profile_selector=self._profile_selector(),
+            default_profile_id=self._learn_profile or DEFAULT_PROFILE_ID,
         )
         return self.async_show_form(
             step_id=step,
@@ -611,7 +630,7 @@ class RF433OptionsFlow(config_entries.OptionsFlow):
         self._scan_current_id = None
 
         session = PreviewSession(
-            data={"latest": None, "current_device_id": None},
+            data={"latest": None, "current_device_id": None, "already_configured": False},
             renderer=render_learning_preview,
         )
         self._learn_session = session
@@ -630,6 +649,11 @@ class RF433OptionsFlow(config_entries.OptionsFlow):
             self._scan_current_id = device_id
             session.data["latest"] = payload
             session.data["current_device_id"] = self._scan_current_id
+            session.data["already_configured"] = _sensor_is_configured(
+                self.options[CONF_SENSORS],
+                device_id,
+                profile_id=self._learn_profile or DEFAULT_PROFILE_ID,
+            )
             session.publish()
 
         self._learn_callback = received
@@ -651,6 +675,7 @@ class RF433OptionsFlow(config_entries.OptionsFlow):
         if self._learn_session is not None:
             self._learn_session.data["latest"] = None
             self._learn_session.data["current_device_id"] = None
+            self._learn_session.data["already_configured"] = False
             self._learn_session.publish()
 
     async def async_step_learn_wait(self, user_input=None):
@@ -664,10 +689,10 @@ class RF433OptionsFlow(config_entries.OptionsFlow):
                 return self.async_create_entry(data=self.options)
             if detection is None:
                 errors["base"] = "no_signal"
-            elif any(
-                sensor["rf_id"] == detection["device_id"]
-                and sensor["profile_id"] == (self._learn_profile or DEFAULT_PROFILE_ID)
-                for sensor in self.options[CONF_SENSORS]
+            elif _sensor_is_configured(
+                self.options[CONF_SENSORS],
+                detection["device_id"],
+                profile_id=self._learn_profile or DEFAULT_PROFILE_ID,
             ):
                 if next_action == LEARNING_ACTION_DONE:
                     self._stop_learn_scan()
@@ -778,7 +803,6 @@ class RF433OptionsFlow(config_entries.OptionsFlow):
             data={"profile": deepcopy(profile), "latest": manager.last_received_payload},
             renderer=render_profile_preview,
         )
-        self._profile_session = session
         register_preview_session(self.hass, self.flow_id, session)
 
         @callback
@@ -794,7 +818,6 @@ class RF433OptionsFlow(config_entries.OptionsFlow):
         if self._profile_callback is not None:
             self.config_entry.runtime_data.scan_callbacks.discard(self._profile_callback)
             self._profile_callback = None
-        self._profile_session = None
         remove_preview_session(self.hass, self.flow_id)
 
     async def async_step_edit_profile(self, user_input=None):

@@ -1,11 +1,11 @@
-"""Constants and data models for RF433 Sensor Manager."""
+"""Constants and data models for RF433 Contact Sensor Manager."""
 
 from __future__ import annotations
 
 from dataclasses import dataclass, field
 from typing import Any
 
-DOMAIN = "rf433_sensor_manager"
+DOMAIN = "rf433_contact_sensor_manager"
 PLATFORMS = ["binary_sensor", "sensor", "event", "button"]
 CONF_NAME = "name"
 CONF_TOPIC = "topic"
@@ -14,7 +14,6 @@ CONF_JSON_PATH = "json_path"
 CONF_DUPLICATE_INTERVAL = "duplicate_interval"
 CONF_PROFILES = "profiles"
 CONF_SENSORS = "sensors"
-CONF_AREA_ID = "area_id"
 FORMAT_JSON = "json"
 FORMAT_RAW = "raw"
 DEFAULT_BRIDGE_NAME = "Tasmota Sonoff RF-bridge"
@@ -49,6 +48,7 @@ class SensorRuntime:
     last_seen: str | None = None
     last_event: str | None = None
     tamper_last_seen: str | None = None
+    manual_closed_at: str | None = None
     code_history: dict[str, dict[str, Any]] = field(default_factory=dict)
     listeners: set[Any] = field(default_factory=set)
 

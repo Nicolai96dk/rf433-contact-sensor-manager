@@ -16,7 +16,7 @@ async def async_setup_entry(hass, entry, async_add_entities):
 
 
 class Contact(RF433Entity, BinarySensorEntity):
-    _attr_name = "Contact"
+    _attr_translation_key = "contact"
 
     def __init__(self, manager, runtime):
         super().__init__(manager, runtime, "contact")
@@ -32,7 +32,7 @@ class Contact(RF433Entity, BinarySensorEntity):
 
 
 class Battery(RF433Entity, BinarySensorEntity):
-    _attr_name = "Low battery"
+    _attr_translation_key = "battery"
     _attr_device_class = BinarySensorDeviceClass.BATTERY
 
     def __init__(self, manager, runtime):
